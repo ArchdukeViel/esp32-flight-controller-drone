@@ -1,7 +1,13 @@
-Prompt 2 — I2C bus scan
-========================
+Prompt 2 — I2C bus scan ✅
+============================
 
-Status: Build gate PASSED.
+Status: Build gate PASSED. Hardware gate PASSED.
+
+Hardware result (2026-06-06):
+- ESP32 DevKit V1 / ESP-WROOM-32, no sensors connected.
+- I2C scan on SDA GPIO21, SCL GPIO22, 400000 Hz found 0 devices.
+- LED blink on GPIO2 continues, no crash.
+- 0 devices is PASS for bus-scan phase when sensors not connected.
 
 What exists:
 - i2c_bus component (v6 handle-based, i2c_master_bus_handle_t)
@@ -10,8 +16,8 @@ What exists:
 
 What's next (Prompt 3):
 - MPU6050 detection: WHO_AM_I, raw read, scaled read
-- But only after this phase is confirmed on hardware (flash + monitor logs)
+- Prompt 3 hardware success requires MPU6050 at 0x68 and WHO_AM_I == 0x68.
 
 Remaining warnings:
 - MCPWM, ESC, WiFi, PID, receiver, safety state machine all DISABLED.
-- Do not connect ESCs or propellers.
+- Do not connect ESCs, motors, or propellers.
