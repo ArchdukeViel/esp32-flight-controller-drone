@@ -94,14 +94,13 @@ GPIO edge interrupt capture is fallback only.
 
 5. ESP-IDF version
 ------------------
-Recommended practical target:
-  ESP-IDF v5.5.x branch for this project unless there is a specific library or
-  toolchain reason to choose another v5.x release.
+This project targets ESP-IDF v6.0.1.
+Toolchain path: C:\Akmal\Project-tools\.espressif\v6.0.1\esp-idf
 
-Reason:
-  ESP-IDF v6.x exists, but it introduces migration and compatibility risks.
-  This project already has enough sharp edges. Do not learn new breaking API
-  behavior while debugging spinning motors.
+Note: ESP-IDF v6 uses the new-style i2c_master API (handle-based:
+i2c_master_bus_handle_t, i2c_device_handle_t). Do not use legacy
+i2c_param_config / i2c_driver_install patterns from v4/v5 examples.
+All driver implementations must use the v6 API.
 
 6. Motor numbering convention
 -----------------------------
