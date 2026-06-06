@@ -1,38 +1,46 @@
-Prompt 2B — I2C scan hardware result (recorded)
-===============================================
+Prompt 3 — MPU6050 WHO_AM_I detection
+======================================
 
-Status: Hardware result RECORDED.
+Status: Build gate PASSED. Hardware gate PASSED.
 
-Hardware result (2026-06-06, I2C scan):
-- ESP32 DevKit V1 / ESP-WROOM-32, no sensors connected.
+Hardware result (2026-06-07):
+- ESP32 DevKit V1 / ESP-WROOM-32 with MPU6050 and BMP280 connected.
 - I2C init OK on SDA GPIO21, SCL GPIO22, 400000 Hz.
-- I2C scan completed: 0 devices found.
+- I2C scan found device at 0x68.
+- 0x68 reported as possible MPU6050.
+- I2C scan found device at 0x76.
+- 0x76 reported as possible BMP280.
+- I2C scan complete: 2 devices found.
+- MPU6050 WHO_AM_I read returned 0x68.
+- Firmware logged:
+  MPU6050 detected: WHO_AM_I = 0x68
+  MPU6050 confirmed at 0x68
 - LED blink on GPIO2 continued. No crash.
+- BMP280 at 0x76 is address-detected only, not confirmed yet.
 
-This is a PASS for the bus-scan phase. 0 devices expected when no
-MPU6050 or BMP280 connected to I2C bus.
+This is a PASS for Prompt 3. MPU6050 confirmed at I2C 0x68.
 
 What exists:
-- i2c_bus component (v6 handle-based, i2c_master_bus_handle_t)
-- Bus init + scan in app_main
-- board_config constants for I2C pins/freq
+- board_config component with hardware constants
+- i2c_bus component with I2C master bus init and scan
+- mpu6050 component with WHO_AM_I detection only
+- app_main initializes I2C, scans bus, checks MPU6050 WHO_AM_I, then enters LED/idle loop
 
-What does NOT exist (forbidden to implement in this phase):
-- MPU6050 driver (WHO_AM_I read, FIFO, config)
-- BMP280 driver (chip ID, calibration, compensated read)
+What does NOT exist:
+- MPU6050 raw accel/gyro burst read
+- MPU6050 scaled read
+- MPU6050 calibration
+- BMP280 chip ID read / driver
+- Estimator
+- PID controller
 - MCPWM / motor output
 - WiFi / Android app
-- PID controller
 - Receiver input
 - Safety state machine
 
-What's next (Prompt 3):
-- MPU6050 detection and WHO_AM_I read.
-- Only after Prompt 2 hardware result recorded. Wait for user direction.
-
-Prompt 3 hardware success requires:
-- MPU6050 detected at I2C address 0x68
-- WHO_AM_I register returns 0x68
+Next gate:
+Prompt 4 — MPU6050 raw accel/gyro burst read.
+Only after Prompt 3 hardware result recorded.
 
 Remaining warnings:
 - MCPWM, ESC, WiFi, PID, receiver, safety state machine all DISABLED.

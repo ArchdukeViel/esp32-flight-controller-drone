@@ -11,24 +11,28 @@ Experimental ESP32 DevKit V1 flight controller firmware using ESP-IDF C++17.
 - **Motors**: 2212 2200KV brushless x4
 - **Future**: Android WiFi telemetry/config/control app
 
-## Current Phase: Prompt 2B - I2C scan hardware result (recorded)
+## Current Phase: Prompt 3 - MPU6050 WHO_AM_I detection ✅ hardware passed
 
-This phase adds I2C master bus initialization and address scanning using the ESP-IDF v6 handle-based API.
+This phase adds MPU6050 detection and WHO_AM_I register read over I2C. MPU6050 confirmed at address 0x68.
 
 ### What exists:
 - Root CMakeLists.txt with C++17 configuration
-- main/app_main.cpp with boot banner, safety warnings, and I2C init/scan
+- main/app_main.cpp with boot banner, safety warnings, I2C init/scan, MPU6050 WHO_AM_I check, LED idle loop
 - components/board_config/ with hardware constants
 - components/i2c_bus/ with I2C master bus init and scan
+- components/mpu6050/ with WHO_AM_I detection only
 - sdkconfig.defaults with minimal ESP32 target
 - docs/current_phase.txt phase marker
 
 ### What does NOT exist (forbidden in this phase):
-- ❌ MPU6050 driver (WHO_AM_I read, FIFO, config)
-- ❌ BMP280 driver (chip ID, calibration, compensated read)
+- ❌ MPU6050 raw accel/gyro burst read
+- ❌ MPU6050 scaled read
+- ❌ MPU6050 calibration
+- ❌ BMP280 chip ID read / driver
+- ❌ Estimator
+- ❌ PID controller
 - ❌ MCPWM / motor output
 - ❌ WiFi / Android app
-- ❌ PID controller
 - ❌ Receiver input
 - ❌ Safety state machine
 
@@ -42,7 +46,7 @@ This phase adds I2C master bus initialization and address scanning using the ESP
 - No arming logic
 - No safety state machine
 
-**Do not connect ESCs, motors, or propellers.** This phase only scans I2C bus and blinks an optional onboard LED.
+**Do not connect ESCs, motors, or propellers.** This phase only reads MPU6050 WHO_AM_I and blinks the onboard LED.
 
 ## Build
 
@@ -93,15 +97,35 @@ I (xxx) i2c_bus:   0x76 -> possible BMP280 (not confirmed)
 
 This is a **PASS** for the bus-scan firmware phase. Zero devices expected when no MPU6050 or BMP280 sensors connected to I2C bus. I2C bus init and scan logic execute correctly. LED blink on GPIO2 continues. No crash.
 
-**Prompt 3 hardware success requires**:
-- MPU6050 detected at I2C address `0x68`
-- `WHO_AM_I` register returning `0x68`
-
 ⚠️ **Safety warning remains**: No ESCs, motors, or propellers connected during any Prompt 2 or Prompt 3 testing.
+
+## Prompt 3 Hardware Result
+
+**Hardware test**: ESP32 DevKit V1 / ESP-WROOM-32 with **MPU6050 and BMP280 connected**.
+**Result**: MPU6050 confirmed at I2C address `0x68`. WHO_AM_I register returned `0x68`.
+
+- I2C initialized on SDA GPIO21, SCL GPIO22, 400000 Hz.
+- I2C scan found device at 0x68.
+- 0x68 was reported as possible MPU6050.
+- I2C scan found device at 0x76.
+- 0x76 was reported as possible BMP280.
+- I2C scan complete: 2 devices found.
+- MPU6050 WHO_AM_I read returned 0x68.
+- Firmware logged:
+  MPU6050 detected: WHO_AM_I = 0x68
+  MPU6050 confirmed at 0x68
+- LED blink continued on GPIO2.
+- No crash.
+- BMP280 at 0x76 is address-detected only, not confirmed yet.
+
+This is a **PASS** for Prompt 3. MPU6050 confirmed at I2C `0x68`.
+
+⚠️ **Safety warning remains**: No ESCs, motors, or propellers connected during any Prompt 3 testing.
 
 ## Next Phase
 
-Prompt 3: MPU6050 detection and WHO_AM_I read (only after I2C scan hardware result recorded).
+Prompt 4: MPU6050 raw accel/gyro burst read.
+Only after Prompt 3 WHO_AM_I == 0x68 confirmed.
 
 ## References
 
