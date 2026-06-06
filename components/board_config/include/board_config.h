@@ -1,7 +1,7 @@
 #pragma once
 
 #include <stdint.h>
-#include "driver/gpio.h"
+
 
 /**
  * @file board_config.h
@@ -56,7 +56,7 @@
 // ESP32 DevKit V1 typically has blue LED on GPIO2
 // Comment out BOARD_HAS_SAFE_ONBOARD_LED to disable LED blink
 #define BOARD_HAS_SAFE_ONBOARD_LED
-#define BOARD_ONBOARD_LED_GPIO (gpio_num_t)2
+#define BOARD_ONBOARD_LED_GPIO_NUM 2
 
 // Safety constants
 #define THROTTLE_MIN_NORMALIZED 0.0f

@@ -16,6 +16,6 @@ CONFIG_LOG_MAXIMUM_LEVEL_VERBOSE=y
 # FreeRTOS
 CONFIG_FREERTOS_HZ=1000
 
-# Disable watchdog for now (will configure properly later)
+# Task watchdog enabled with 10s timeout (will tune per-phase later)
 CONFIG_ESP_TASK_WDT_EN=y
 CONFIG_ESP_TASK_WDT_TIMEOUT_S=10

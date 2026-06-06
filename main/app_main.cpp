@@ -26,19 +26,19 @@ extern "C" void app_main(void) {
     
     // Optional LED blink if board_config defines a safe onboard LED pin
 #ifdef BOARD_HAS_SAFE_ONBOARD_LED
-    ESP_LOGI(TAG, "Blinking onboard LED on GPIO %d", BOARD_ONBOARD_LED_GPIO);
+    ESP_LOGI(TAG, "Blinking onboard LED on GPIO %d", BOARD_ONBOARD_LED_GPIO_NUM);
     gpio_config_t io_conf = {};
     io_conf.intr_type = GPIO_INTR_DISABLE;
     io_conf.mode = GPIO_MODE_OUTPUT;
-    io_conf.pin_bit_mask = (1ULL << BOARD_ONBOARD_LED_GPIO);
+    io_conf.pin_bit_mask = (1ULL << BOARD_ONBOARD_LED_GPIO_NUM);
     io_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
     io_conf.pull_up_en = GPIO_PULLUP_DISABLE;
     ESP_ERROR_CHECK(gpio_config(&io_conf));
     
     while (1) {
-        gpio_set_level(BOARD_ONBOARD_LED_GPIO, 1);
+        ESP_ERROR_CHECK(gpio_set_level((gpio_num_t)BOARD_ONBOARD_LED_GPIO_NUM, 1));
         vTaskDelay(pdMS_TO_TICKS(500));
-        gpio_set_level(BOARD_ONBOARD_LED_GPIO, 0);
+        ESP_ERROR_CHECK(gpio_set_level((gpio_num_t)BOARD_ONBOARD_LED_GPIO_NUM, 0));
         vTaskDelay(pdMS_TO_TICKS(500));
     }
 #else
