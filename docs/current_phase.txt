@@ -1,22 +1,38 @@
-Prompt 2 — I2C bus scan ✅
-============================
+Prompt 2B — I2C scan hardware result (recorded)
+===============================================
 
-Status: Build gate PASSED. Hardware gate PASSED.
+Status: Hardware result RECORDED.
 
-Hardware result (2026-06-06):
+Hardware result (2026-06-06, I2C scan):
 - ESP32 DevKit V1 / ESP-WROOM-32, no sensors connected.
-- I2C scan on SDA GPIO21, SCL GPIO22, 400000 Hz found 0 devices.
-- LED blink on GPIO2 continues, no crash.
-- 0 devices is PASS for bus-scan phase when sensors not connected.
+- I2C init OK on SDA GPIO21, SCL GPIO22, 400000 Hz.
+- I2C scan completed: 0 devices found.
+- LED blink on GPIO2 continued. No crash.
+
+This is a PASS for the bus-scan phase. 0 devices expected when no
+MPU6050 or BMP280 connected to I2C bus.
 
 What exists:
 - i2c_bus component (v6 handle-based, i2c_master_bus_handle_t)
 - Bus init + scan in app_main
 - board_config constants for I2C pins/freq
 
+What does NOT exist (forbidden to implement in this phase):
+- MPU6050 driver (WHO_AM_I read, FIFO, config)
+- BMP280 driver (chip ID, calibration, compensated read)
+- MCPWM / motor output
+- WiFi / Android app
+- PID controller
+- Receiver input
+- Safety state machine
+
 What's next (Prompt 3):
-- MPU6050 detection: WHO_AM_I, raw read, scaled read
-- Prompt 3 hardware success requires MPU6050 at 0x68 and WHO_AM_I == 0x68.
+- MPU6050 detection and WHO_AM_I read.
+- Only after Prompt 2 hardware result recorded. Wait for user direction.
+
+Prompt 3 hardware success requires:
+- MPU6050 detected at I2C address 0x68
+- WHO_AM_I register returns 0x68
 
 Remaining warnings:
 - MCPWM, ESC, WiFi, PID, receiver, safety state machine all DISABLED.

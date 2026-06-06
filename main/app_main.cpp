@@ -5,6 +5,7 @@
 #include "driver/gpio.h"
 #include "board_config.h"
 #include "i2c_bus.h"
+#include "mpu6050.h"
 
 static const char* TAG = "main";
 
@@ -17,7 +18,7 @@ extern "C" void app_main(void) {
     ESP_LOGI(TAG, "Sensors: MPU6050, BMP280");
     ESP_LOGI(TAG, "ESCs: 30A, Motors: 2212 2200KV");
     ESP_LOGI(TAG, "Framework: ESP-IDF v6.0.1, C++17");
-    ESP_LOGI(TAG, "Phase: Prompt 2 - I2C bus scan");
+    ESP_LOGI(TAG, "Phase: Prompt 3 - MPU6050 WHO_AM_I detection");
     ESP_LOGI(TAG, "========================================");
 
     // Safety message
@@ -30,6 +31,14 @@ extern "C" void app_main(void) {
 
     // Scan I2C bus for devices
     ESP_ERROR_CHECK(i2c_bus_scan());
+
+    // Detect MPU6050 via WHO_AM_I register read
+    esp_err_t mpu_ret = mpu6050_detect();
+    if (mpu_ret == ESP_OK) {
+        ESP_LOGI(TAG, "MPU6050 confirmed at 0x%02X", MPU6050_I2C_ADDR);
+    } else {
+        ESP_LOGW(TAG, "MPU6050 not detected or WHO_AM_I mismatch (will retry on next boot)");
+    }
 
     // Optional LED blink if board_config defines a safe onboard LED pin
 #ifdef BOARD_HAS_SAFE_ONBOARD_LED

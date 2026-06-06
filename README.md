@@ -11,7 +11,7 @@ Experimental ESP32 DevKit V1 flight controller firmware using ESP-IDF C++17.
 - **Motors**: 2212 2200KV brushless x4
 - **Future**: Android WiFi telemetry/config/control app
 
-## Current Phase: Prompt 2 - I2C bus scan ✅ (hardware result recorded)
+## Current Phase: Prompt 2B - I2C scan hardware result (recorded)
 
 This phase adds I2C master bus initialization and address scanning using the ESP-IDF v6 handle-based API.
 
@@ -88,10 +88,10 @@ I (xxx) i2c_bus:   0x76 -> possible BMP280 (not confirmed)
 
 ## Prompt 2 Hardware Result
 
-**Hardware test**: ESP32 DevKit V1 / ESP-WROOM-32, no sensors connected.
+**Hardware test**: ESP32 DevKit V1 / ESP-WROOM-32, **no sensors connected**.
 **Result**: I2C scan on SDA GPIO21, SCL GPIO22, 400000 Hz found **0 devices**.
 
-This is a **PASS** for the bus-scan firmware phase. Zero devices is expected when no MPU6050 or BMP280 sensors are connected to the I2C bus. The I2C bus init and scan logic executes correctly, LED blink on GPIO2 continues, and no crash occurs.
+This is a **PASS** for the bus-scan firmware phase. Zero devices expected when no MPU6050 or BMP280 sensors connected to I2C bus. I2C bus init and scan logic execute correctly. LED blink on GPIO2 continues. No crash.
 
 **Prompt 3 hardware success requires**:
 - MPU6050 detected at I2C address `0x68`
