@@ -1,23 +1,17 @@
-Current phase: Prompt 1 - ESP-IDF skeleton and board_config only.
+Prompt 2 — I2C bus scan
+========================
 
-Allowed files:
-- CMakeLists.txt (root)
-- main/CMakeLists.txt
-- main/app_main.cpp
-- components/board_config/CMakeLists.txt
-- components/board_config/include/board_config.h
-- sdkconfig.defaults
-- README.md
-- docs/current_phase.txt
+Status: Build gate PASSED.
 
-Forbidden features:
-- Sensor drivers (MPU6050, BMP280)
-- I2C implementation
-- MCPWM / motor output
-- WiFi / Android app
-- PID / control loops
-- Receiver input
-- Safety state machine
-- Any components beyond board_config
+What exists:
+- i2c_bus component (v6 handle-based, i2c_master_bus_handle_t)
+- Bus init + scan in app_main
+- board_config constants for I2C pins/freq
 
-Next gate: Prompt 2 - I2C bus scan (only after build passes).
+What's next (Prompt 3):
+- MPU6050 detection: WHO_AM_I, raw read, scaled read
+- But only after this phase is confirmed on hardware (flash + monitor logs)
+
+Remaining warnings:
+- MCPWM, ESC, WiFi, PID, receiver, safety state machine all DISABLED.
+- Do not connect ESCs or propellers.
