@@ -1,0 +1,23 @@
+Current phase: Prompt 1 - ESP-IDF skeleton and board_config only.
+
+Allowed files:
+- CMakeLists.txt (root)
+- main/CMakeLists.txt
+- main/app_main.cpp
+- components/board_config/CMakeLists.txt
+- components/board_config/include/board_config.h
+- sdkconfig.defaults
+- README.md
+- docs/current_phase.txt
+
+Forbidden features:
+- Sensor drivers (MPU6050, BMP280)
+- I2C implementation
+- MCPWM / motor output
+- WiFi / Android app
+- PID / control loops
+- Receiver input
+- Safety state machine
+- Any components beyond board_config
+
+Next gate: Prompt 2 - I2C bus scan (only after build passes).

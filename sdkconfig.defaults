@@ -1,0 +1,21 @@
+# ESP32 Flight Controller Drone - Minimal sdkconfig defaults
+# Target: ESP32 DevKit V1 (classic ESP32)
+CONFIG_IDF_TARGET="esp32"
+CONFIG_IDF_TARGET_ESP32=y
+
+# Minimal config - do not enable WiFi, Bluetooth, MCPWM, etc. manually
+# These will be enabled in later phases as needed
+
+# Serial console
+CONFIG_ESP_CONSOLE_UART_BAUDRATE=115200
+
+# Log settings
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+CONFIG_LOG_MAXIMUM_LEVEL_VERBOSE=y
+
+# FreeRTOS
+CONFIG_FREERTOS_HZ=1000
+
+# Disable watchdog for now (will configure properly later)
+CONFIG_ESP_TASK_WDT_EN=y
+CONFIG_ESP_TASK_WDT_TIMEOUT_S=10
