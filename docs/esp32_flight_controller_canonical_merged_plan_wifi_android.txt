@@ -1,0 +1,1777 @@
+================================================================================
+ESP32 DEVKIT V1 FLIGHT CONTROLLER FIRMWARE
+CANONICAL MERGED DESIGN PLAN + WIFI ANDROID CONTROL ROADMAP
+================================================================================
+
+Project target:
+  ESP32 DevKit V1 + MPU6050 + BMP280 + 30A ESC + 2212 2200KV motors
+
+Framework target:
+  ESP-IDF from VS Code extension, C++17 components, no Arduino core in the
+  real-time control path.
+
+Source basis:
+  - Claude plan used as the architecture/safety base.
+  - DeepSeek plan used as implementation prompt/phase scaffolding.
+  - Technical corrections applied before this file is used by Codex.
+
+Document purpose:
+  This is the single canonical plan to give to Codex/VS Code as the project
+  source of truth. Do not feed Codex the four original plans together unless
+  you enjoy watching an AI summon a firmware chimera with propellers.
+
+================================================================================
+0. BLUNT EXECUTIVE JUDGMENT
+================================================================================
+
+This hardware is usable for learning, bench validation, sensor work, PID
+experiments, motor-output experiments, and eventually a cautious tethered/low
+hover test.
+
+This hardware is NOT a production flight controller. The ESP32 DevKit V1 is a
+soft real-time board with WiFi/Bluetooth stacks, I2C sensors, and awkward
+physical mounting. The MPU6050 has no magnetometer. The BMP280 is useful for
+slow altitude telemetry, not fast altitude hold. The ESC/motor combination is
+fine for a 450 mm class quad, but power is not the hard part. Timing, safety,
+state control, and testing discipline are the hard parts.
+
+Recommendation:
+  Build this as a staged experimental flight-controller laboratory. Do not jump
+  to free flight. Do not jump to WiFi joystick control. Do not install props
+  until the pre-propeller review says every gate has passed.
+
+Android WiFi control recommendation:
+  Use the Android app first for telemetry, calibration, PID tuning, and motor
+  test commands while motors are disabled or no-prop. Only after the full
+  no-prop integration passes should WiFi command input be tested as an
+  experimental control source. Active WiFi flight control must use UDP packets,
+  a dead-man switch, packet watchdog, sequence numbers, CRC, local ESP32 AP mode,
+  and immediate motor cutoff on packet loss. Even then: tethered testing only
+  before any real hover attempt.
+
+Strategic rule:
+  The app must never be the only safety system. The firmware safety state
+  machine owns safety. The Android app merely requests commands. Requests are
+  disposable. Safety is law.
+
+================================================================================
+1. TECHNICAL CORRECTIONS APPLIED
+================================================================================
+
+These corrections override the original Claude and DeepSeek documents.
+
+1. MPU6050 WHO_AM_I
+-------------------
+Correct expected value:
+  MPU6050 WHO_AM_I register expected value = 0x68
+
+Implementation rule:
+  If WHO_AM_I is not 0x68, do not silently continue. Log the actual value and
+  identify whether the connected sensor is a different MPU/ICM variant.
+
+2. BMP280 chip ID
+-----------------
+Correct expected value:
+  BMP280 chip ID register expected value = 0x58
+
+Implementation rule:
+  If chip ID is 0x60, the board is likely BME280 or another Bosch environmental
+  sensor variant, not BMP280. Do not pretend it is BMP280 unless the driver
+  explicitly supports the detected device.
+
+3. ESP32 MCPWM hardware
+-----------------------
+Correct assumption for classic ESP32 DevKit V1:
+  The ESP32 has enough MCPWM resources for four ESC outputs. Use the ESP-IDF
+  MCPWM driver and do not copy any claim that classic ESP32 has three MCPWM
+  modules. Treat MCPWM resource allocation as board-specific and verify during
+  driver implementation.
+
+4. Receiver input
+-----------------
+Use RMT as the primary receiver PWM capture method if an RC receiver is used.
+GPIO edge interrupt capture is fallback only.
+
+5. ESP-IDF version
+------------------
+Recommended practical target:
+  ESP-IDF v5.5.x branch for this project unless there is a specific library or
+  toolchain reason to choose another v5.x release.
+
+Reason:
+  ESP-IDF v6.x exists, but it introduces migration and compatibility risks.
+  This project already has enough sharp edges. Do not learn new breaking API
+  behavior while debugging spinning motors.
+
+6. Motor numbering convention
+-----------------------------
+This project uses ONE convention everywhere:
+
+           FRONT
+      M1           M2
+   front-left   front-right
+       \          /
+        \        /
+         \      /
+          \    /
+          /    \
+         /      \
+        /        \
+       /          \
+      M4           M3
+   rear-left    rear-right
+            REAR
+
+Default rotation convention, viewed from above:
+  M1 front-left  = CCW
+  M2 front-right = CW
+  M3 rear-right  = CCW
+  M4 rear-left   = CW
+
+Every firmware log, motor test command, mixer equation, README diagram, and
+Android app UI must use this exact convention.
+
+================================================================================
+2. NON-NEGOTIABLE SAFETY RULES
+================================================================================
+
+1. Propellers are forbidden until pre-propeller readiness is signed off.
+2. Motor power is forbidden until ESC output has been measured on a logic
+   analyzer or oscilloscope.
+3. MCPWM outputs must initialize to 1000 us before any motor/ESC task runs.
+4. Emergency stop must be implemented before any motor spin test.
+5. Every motor test must require explicit no-prop confirmation.
+6. Arming requires explicit user action plus pre-arm checks.
+7. App command packets are never trusted blindly.
+8. Any stale input source means throttle forced to zero and motors to 1000 us.
+9. Any persistent IMU fault means FAILSAFE or ERROR_LOCKOUT.
+10. BMP280 failure is not flight-critical for attitude mode.
+11. WiFi tuning/config mode and real motor control are separated by state.
+12. If active WiFi command mode is later enabled, it must be treated as
+    experimental and must run through stricter failsafe testing than RC input.
+
+================================================================================
+3. RECOMMENDED FIRMWARE STACK
+================================================================================
+
+Language:
+  C++17 using ESP-IDF C APIs.
+
+C++ constraints:
+  - No exceptions in embedded path.
+  - No RTTI.
+  - No heap allocation inside the control loop.
+  - No STL containers in the real-time path unless statically allocated and
+    proven harmless.
+  - Use plain structs for telemetry and inter-module data.
+  - Use classes only where they improve encapsulation: PID, estimator,
+    state machine, driver wrappers.
+
+ESP-IDF components:
+  - board_config
+  - i2c_bus
+  - mpu6050
+  - bmp280
+  - calibration
+  - estimation
+  - input
+  - wifi_control
+  - control
+  - motor_output
+  - safety
+  - telemetry
+  - config_nvs
+  - diagnostics
+  - tests
+
+Core split:
+  Core 1: flight control, IMU read, estimator, PID, mixer, MCPWM command,
+          safety checks.
+  Core 0: WiFi, HTTP server, UDP command receiver, telemetry streaming, NVS,
+          diagnostics, low-priority commands.
+
+Task model, initial target:
+
+  Task                       Core  Priority   Period / trigger
+  -------------------------------------------------------------------------
+  control_task                  1      high   250 Hz, timer-driven
+  imu_task                      1      high   250 Hz, synchronized with control
+  safety_task                   1      high   100 Hz
+  motor_output_task             1      high   250 Hz or direct from control_task
+  baro_task                     0      low    10-25 Hz
+  wifi_udp_rx_task              0      med    packet-driven, active only in WiFi modes
+  wifi_http_task                0      low    config/tuning only, disabled in active control
+  telemetry_task                0      low    20-50 Hz
+  diagnostics_task              0      low    1 Hz
+  config_task                   0      low    on demand
+
+Control-loop initial rate:
+  250 Hz / 4000 us period.
+
+Why not 500 Hz first:
+  A beginner ESP-IDF flight controller with I2C sensors, WiFi experiments, and
+  old hardware needs boring success before heroic timing. Start at 250 Hz.
+  Optimize later only after logs prove timing margin.
+
+================================================================================
+4. REPOSITORY STRUCTURE
+================================================================================
+
+esp32-flight-controller/
+|-- CMakeLists.txt
+|-- sdkconfig.defaults
+|-- README.md
+|-- docs/
+|   |-- architecture.md
+|   |-- safety_checklists.md
+|   |-- test_results.md
+|   |-- android_wifi_protocol.md
+|   |-- pre_propeller_review.md
+|-- main/
+|   |-- CMakeLists.txt
+|   |-- app_main.cpp
+|-- components/
+|   |-- board_config/
+|   |   |-- CMakeLists.txt
+|   |   |-- include/board_config.h
+|   |-- i2c_bus/
+|   |   |-- CMakeLists.txt
+|   |   |-- include/i2c_bus.h
+|   |   |-- src/i2c_bus.cpp
+|   |-- mpu6050/
+|   |   |-- CMakeLists.txt
+|   |   |-- include/mpu6050.h
+|   |   |-- src/mpu6050.cpp
+|   |-- bmp280/
+|   |   |-- CMakeLists.txt
+|   |   |-- include/bmp280.h
+|   |   |-- src/bmp280.cpp
+|   |-- calibration/
+|   |   |-- CMakeLists.txt
+|   |   |-- include/sensor_calibration.h
+|   |   |-- src/sensor_calibration.cpp
+|   |-- estimation/
+|   |   |-- CMakeLists.txt
+|   |   |-- include/attitude_estimator.h
+|   |   |-- include/altitude_estimator.h
+|   |   |-- src/attitude_estimator.cpp
+|   |   |-- src/altitude_estimator.cpp
+|   |-- input/
+|   |   |-- CMakeLists.txt
+|   |   |-- include/control_input.h
+|   |   |-- include/receiver_rmt.h
+|   |   |-- include/input_stub.h
+|   |   |-- src/receiver_rmt.cpp
+|   |   |-- src/input_stub.cpp
+|   |-- wifi_control/
+|   |   |-- CMakeLists.txt
+|   |   |-- include/wifi_manager.h
+|   |   |-- include/wifi_command_protocol.h
+|   |   |-- include/udp_control_receiver.h
+|   |   |-- include/http_config_server.h
+|   |   |-- src/wifi_manager.cpp
+|   |   |-- src/udp_control_receiver.cpp
+|   |   |-- src/http_config_server.cpp
+|   |-- control/
+|   |   |-- CMakeLists.txt
+|   |   |-- include/pid_controller.h
+|   |   |-- include/pid_config.h
+|   |   |-- include/motor_mixer.h
+|   |   |-- src/pid_controller.cpp
+|   |   |-- src/motor_mixer.cpp
+|   |-- motor_output/
+|   |   |-- CMakeLists.txt
+|   |   |-- include/esc_mcpwm.h
+|   |   |-- include/motor_test_mode.h
+|   |   |-- src/esc_mcpwm.cpp
+|   |   |-- src/motor_test_mode.cpp
+|   |-- safety/
+|   |   |-- CMakeLists.txt
+|   |   |-- include/safety_state_machine.h
+|   |   |-- include/arming_manager.h
+|   |   |-- include/failsafe_manager.h
+|   |   |-- src/safety_state_machine.cpp
+|   |   |-- src/arming_manager.cpp
+|   |   |-- src/failsafe_manager.cpp
+|   |-- telemetry/
+|   |   |-- CMakeLists.txt
+|   |   |-- include/telemetry_logger.h
+|   |   |-- src/telemetry_logger.cpp
+|   |-- config_nvs/
+|   |   |-- CMakeLists.txt
+|   |   |-- include/config_nvs.h
+|   |   |-- src/config_nvs.cpp
+|   |-- diagnostics/
+|   |   |-- CMakeLists.txt
+|   |   |-- include/diagnostics.h
+|   |   |-- src/diagnostics.cpp
+|-- tests/
+|   |-- CMakeLists.txt
+|   |-- test_pid.cpp
+|   |-- test_mixer.cpp
+|   |-- test_safety.cpp
+|   |-- test_wifi_protocol.cpp
+
+================================================================================
+5. BOARD CONFIGURATION BASELINE
+================================================================================
+
+Default pins are suggestions. Verify against actual wiring before build.
+
+I2C:
+  SDA = GPIO21
+  SCL = GPIO22
+  Clock = 400 kHz
+
+MPU6050:
+  Address = 0x68 if AD0 low
+  WHO_AM_I = 0x68
+
+BMP280:
+  Address = 0x76 or 0x77 depending on SDO
+  Chip ID = 0x58
+
+ESC/MCPWM suggested pins:
+  M1 = GPIO18
+  M2 = GPIO19
+  M3 = GPIO23
+  M4 = GPIO25
+
+WiFi status / safety indicators:
+  LED_STATUS = GPIO2 if available
+  Optional buzzer = spare GPIO if available
+
+Optional receiver pins if RC receiver is added:
+  CH1 roll     = GPIO34 input-only
+  CH2 pitch    = GPIO35 input-only
+  CH3 throttle = GPIO32
+  CH4 yaw      = GPIO33
+  CH5 arm      = GPIO26
+  CH6 mode     = GPIO27
+
+Physical safety recommendation:
+  Add a real mechanical power disconnect for ESC/battery power. Software is not
+  a kill switch. Software is a polite suggestion sent through silicon.
+
+================================================================================
+6. DATA STRUCTURES
+================================================================================
+
+Use typed structs. Do not pass loose floats everywhere.
+
+struct ImuRawSample {
+  int16_t ax, ay, az;
+  int16_t temp;
+  int16_t gx, gy, gz;
+  uint64_t timestamp_us;
+  bool valid;
+};
+
+struct ImuScaledSample {
+  float ax_g, ay_g, az_g;
+  float gx_dps, gy_dps, gz_dps;
+  float temp_c;
+  uint64_t timestamp_us;
+  bool valid;
+};
+
+struct BaroSample {
+  float pressure_pa;
+  float temperature_c;
+  float altitude_m;
+  uint64_t timestamp_us;
+  bool valid;
+};
+
+struct CalibrationData {
+  float gyro_bias_dps[3];
+  float accel_bias_g[3];
+  float ground_pressure_pa;
+  uint32_t schema_version;
+  bool valid;
+};
+
+struct SensorHealth {
+  bool imu_detected;
+  bool imu_read_ok;
+  bool imu_calibrated;
+  bool accel_mag_ok;
+  bool baro_detected;
+  bool baro_read_ok;
+  uint32_t i2c_error_count;
+  uint32_t imu_consecutive_errors;
+  uint32_t baro_consecutive_errors;
+};
+
+struct AttitudeEstimate {
+  float roll_deg;
+  float pitch_deg;
+  float roll_rate_dps;
+  float pitch_rate_dps;
+  float yaw_rate_dps;
+  bool valid;
+};
+
+struct ControlInput {
+  float roll;       // -1.0 to +1.0
+  float pitch;      // -1.0 to +1.0
+  float yaw;        // -1.0 to +1.0
+  float throttle;   //  0.0 to +1.0
+  bool arm_request;
+  bool disarm_request;
+  bool estop_request;
+  bool deadman_active;
+  bool valid;
+  bool source_is_wifi;
+  bool source_is_receiver;
+  bool source_is_stub;
+  uint64_t last_update_us;
+};
+
+struct PidOutput {
+  float roll_us;
+  float pitch_us;
+  float yaw_us;
+  bool valid;
+};
+
+struct MotorCommand {
+  uint16_t m1_us;
+  uint16_t m2_us;
+  uint16_t m3_us;
+  uint16_t m4_us;
+  bool valid;
+};
+
+================================================================================
+7. SENSOR DESIGN
+================================================================================
+
+7.1 I2C bus
+-----------
+Use ESP-IDF i2c_master APIs. Provide:
+  - init
+  - scan
+  - read register
+  - write register
+  - burst read
+  - bus mutex
+  - timeout on every transaction
+
+Never block forever on I2C. A hung sensor must become a fault, not a frozen
+flight controller.
+
+7.2 MPU6050
+-----------
+Initialization:
+  1. Wake sensor from sleep.
+  2. Select stable clock source.
+  3. Configure DLPF.
+  4. Configure gyro range.
+  5. Configure accelerometer range.
+  6. Read WHO_AM_I and require 0x68.
+  7. Read burst sample from 0x3B, 14 bytes.
+
+Recommended initial ranges:
+  Gyro = +/-500 deg/s, scale = 65.5 LSB/(deg/s)
+  Accel = +/-4 g, scale = 8192 LSB/g
+  DLPF = about 42/43 Hz class setting
+
+Calibration:
+  - Board still.
+  - Collect 500-2000 samples.
+  - Compute gyro bias.
+  - Compute accelerometer bias; Z axis expects +1 g depending on orientation.
+  - Save to NVS.
+  - Validate on boot.
+
+7.3 BMP280
+----------
+Initialization:
+  1. Reset.
+  2. Read chip ID and require 0x58.
+  3. Read calibration coefficients.
+  4. Configure oversampling and IIR filtering.
+  5. Read compensated pressure and temperature.
+  6. Compute relative altitude from ground pressure baseline.
+
+Important:
+  BMP280 is not in the fast control loop. It runs at 10-25 Hz and is used for
+  telemetry and future slow altitude experiments only.
+
+7.4 Sensor-only pass criteria
+-----------------------------
+PASS when:
+  - I2C scan shows MPU6050 at 0x68.
+  - MPU6050 WHO_AM_I = 0x68.
+  - BMP280 detected at 0x76/0x77 if installed.
+  - BMP280 chip ID = 0x58.
+  - MPU6050 raw values change plausibly when tilted.
+  - Calibrated gyro near zero while stationary.
+  - Accel magnitude near 1 g while stationary.
+  - BMP280 pressure plausible.
+  - CSV telemetry is stable for at least 30 minutes before moving on.
+
+================================================================================
+8. ATTITUDE ESTIMATION
+================================================================================
+
+Initial estimator:
+  Complementary filter for roll and pitch.
+
+Formula:
+  roll_accel  = atan2(ay, az) * RAD_TO_DEG
+  pitch_accel = atan2(-ax, sqrt(ay*ay + az*az)) * RAD_TO_DEG
+
+  roll  = alpha * (roll  + gx * dt) + (1-alpha) * roll_accel
+  pitch = alpha * (pitch + gy * dt) + (1-alpha) * pitch_accel
+
+Initial alpha:
+  0.98
+
+Yaw:
+  No absolute yaw angle because there is no magnetometer. Only yaw rate control
+  using gyro Z is allowed.
+
+Accel magnitude gate:
+  If accel magnitude is outside plausible range, skip accel correction that
+  cycle and use gyro integration only.
+
+Pass criteria:
+  - Roll/pitch near 0 deg on level table.
+  - Roll/pitch track a 30-45 deg manual tilt.
+  - Stationary drift is acceptable over 5 minutes.
+  - No estimator blow-up during quick hand movements.
+
+================================================================================
+9. CONTROL INPUT SOURCES
+================================================================================
+
+Input source priority:
+  1. Emergency stop always wins.
+  2. Physical disarm / failsafe always wins.
+  3. RC receiver input if valid and selected.
+  4. WiFi command input if valid and selected in WiFi-control mode.
+  5. Stub input only for bench tests.
+
+9.1 RC receiver input
+---------------------
+Use RMT as primary PWM capture if RC receiver is connected.
+
+Receiver channels:
+  Roll     1000-2000 us, center 1500
+  Pitch    1000-2000 us, center 1500
+  Throttle 1000-2000 us, low 1000
+  Yaw      1000-2000 us, center 1500
+  Arm      low/high switch
+  Mode     optional
+
+Failsafe:
+  If no valid pulse for 100 ms, receiver invalid. Force throttle to zero,
+  disarm, and enter FAILSAFE if armed.
+
+9.2 Stub input
+--------------
+Use only for bench testing:
+  throttle = 0
+  roll = 0
+  pitch = 0
+  yaw = 0
+  arm = false
+
+Stub input must not be allowed to arm normal active flight mode.
+
+9.3 WiFi Android command input
+------------------------------
+WiFi control is added as a separate input module, not hacked into receiver code.
+The module outputs the same ControlInput struct used by RC/stub input.
+
+Phases:
+  Phase A: WiFi telemetry/config only, motors disabled.
+  Phase B: WiFi motor-test command, no props, capped throttle.
+  Phase C: WiFi command input dry-run, motors forced 1000 us.
+  Phase D: WiFi no-prop active control, motors capped low.
+  Phase E: WiFi tethered hover test only after full pre-prop review.
+
+Do not start with WiFi active flight. That is how projects become shrapnel poetry.
+
+================================================================================
+10. WIFI ANDROID CONTROL ARCHITECTURE
+================================================================================
+
+10.1 Recommended user-facing approach
+-------------------------------------
+Build two interfaces, not one overloaded monster:
+
+1. ESP32-hosted web UI, used from Android browser:
+   - easiest for first implementation
+   - no Android install needed
+   - good for telemetry, calibration, PID settings, sensor checks
+   - not recommended for active joystick control
+
+2. Native Android app, Kotlin + Jetpack Compose:
+   - used later for low-latency UDP command packets
+   - has real joystick UI, dead-man button, emergency stop button
+   - can maintain packet rate and connection state more cleanly
+
+Avoid React Native/Expo for the control-link phase unless you are comfortable
+with native UDP modules. Flutter is possible, but native Kotlin is more direct.
+
+10.2 ESP32 WiFi modes
+---------------------
+Use SoftAP mode first:
+  SSID: ESP32_FC_SETUP or ESP32_FC_CONTROL
+  Static IP: 192.168.4.1
+  App/phone connects directly to ESP32.
+
+Reasons:
+  - no router dependency
+  - predictable IP
+  - no internet needed
+  - fewer moving parts
+
+Disable WiFi power save in control experiments.
+
+10.3 HTTP config server, DISARMED only
+--------------------------------------
+HTTP server is only for DISARMED configuration:
+
+GET  /status
+GET  /telemetry/latest
+GET  /config
+POST /calibrate/imu
+POST /calibrate/baro_baseline
+GET  /pid
+POST /pid
+POST /pid/save
+POST /pid/defaults
+POST /motor_test/prepare
+POST /motor_test/start
+POST /motor_test/stop
+POST /estop
+
+Hard rules:
+  - HTTP server must not run during ACTIVE_STABILIZE.
+  - HTTP motor-test commands require NO_PROP confirmation.
+  - HTTP cannot bypass safety state machine.
+  - HTTP cannot arm real flight mode.
+
+10.4 UDP command protocol for Android control
+---------------------------------------------
+Use UDP for active command input, not HTTP.
+
+UDP command packet rate:
+  50 Hz from Android app to ESP32.
+
+Firmware behavior:
+  - If no valid packet for 150 ms: force throttle zero and disarm/failsafe.
+  - If packet sequence stalls or repeats too often: input invalid.
+  - If CRC fails: packet ignored.
+  - If deadman is false: throttle forced zero.
+  - If estop is true: immediate emergency stop.
+
+Packet format, version 1:
+
+struct WifiControlPacketV1 {
+  uint8_t  magic0;        // 'F'
+  uint8_t  magic1;        // 'C'
+  uint8_t  version;       // 1
+  uint8_t  flags;         // bit0 deadman, bit1 arm_req, bit2 disarm_req, bit3 estop
+  uint32_t sequence;
+  uint32_t app_time_ms;
+  int16_t  roll;          // -1000..1000
+  int16_t  pitch;         // -1000..1000
+  int16_t  yaw;           // -1000..1000
+  uint16_t throttle;      // 0..1000
+  uint16_t crc16;
+};
+
+Mapping:
+  roll      = packet.roll / 1000.0
+  pitch     = packet.pitch / 1000.0
+  yaw       = packet.yaw / 1000.0
+  throttle  = packet.throttle / 1000.0
+
+Initial throttle cap for WiFi experiments:
+  Dry run: 0.0, motor output forced to 1000 us.
+  No-prop motor response: <= 0.10 normalized.
+  Tethered prop test: conservative cap decided only after pre-prop review.
+
+10.5 Telemetry from ESP32 to Android
+------------------------------------
+Use UDP broadcast or unicast telemetry at 10-20 Hz for app display.
+Use UART CSV as the canonical debug log during early phases.
+
+Telemetry fields:
+  - state
+  - armed flag
+  - failsafe reason
+  - loop time
+  - missed deadlines
+  - WiFi packet age
+  - WiFi RSSI
+  - roll/pitch/yaw_rate
+  - throttle command
+  - motor outputs
+  - sensor health
+  - battery voltage if available
+
+10.6 Android app UI requirements
+--------------------------------
+Minimum screen:
+  - Connection status
+  - Current safety state
+  - Big red ESTOP button
+  - Dead-man hold button
+  - Arm/disarm controls with long-press confirmation
+  - Throttle slider/stick with spring-to-zero for early test modes
+  - Roll/pitch joystick
+  - Yaw slider/stick
+  - Sensor health indicators
+  - Packet rate indicator
+  - Last telemetry age
+  - Motor outputs display
+
+App behavior:
+  - If app goes to background: send disarm/estop packet for 500 ms, then stop.
+  - If screen locks: send disarm/estop.
+  - If dead-man released: throttle zero.
+  - If telemetry stale: warn and force command packets to disarm.
+  - App must not remember armed state across restart.
+  - App must boot into DISARMED UI every time.
+
+10.7 WiFi active-control restrictions
+-------------------------------------
+Active WiFi command mode is allowed only if:
+  - Sensors pass.
+  - Calibration valid.
+  - Loop timing clean.
+  - UDP packet input is stable for 30 minutes in dry-run.
+  - Failsafe packet-loss tests pass.
+  - Emergency stop works.
+  - No-prop motor response tests pass.
+  - Pre-prop review explicitly approves WiFi mode.
+
+WiFi active-control mode disables:
+  - HTTP config server
+  - PID save operations
+  - heavy logging
+  - OTA updates
+  - Bluetooth
+  - any blocking NVS writes
+
+================================================================================
+11. PID CONTROL DESIGN
+================================================================================
+
+Architecture:
+  Cascaded angle -> rate PID for roll and pitch.
+  Rate-only PID for yaw.
+
+Outer angle loop:
+  desired_angle - estimated_angle -> desired_rate
+
+Inner rate loop:
+  desired_rate - measured_rate -> motor correction
+
+Initial target rates:
+  Control update: 250 Hz.
+  Angle and rate loops both run at 250 Hz initially for simplicity.
+  Later optimization may run rate at 500 Hz if logs prove timing margin.
+
+PID requirements:
+  - anti-windup
+  - derivative filtering or derivative-on-measurement
+  - output clamping
+  - integrator reset on disarm
+  - PID output zero when not armed
+  - PID output zero when IMU invalid
+  - PID bypassed in motor test mode
+  - throttle attenuation at low throttle
+
+Conservative starting gains:
+  These are only bench defaults, not flight guarantees.
+
+  Angle roll/pitch:
+    P = 3.0 to 4.0
+    I = 0.02 to 0.08
+    D = 0.0 initially
+    output limit = +/- 200 deg/s desired rate
+
+  Rate roll/pitch:
+    P = 0.5 to 1.5
+    I = 0.01 to 0.5
+    D = 0.0 initially
+    output limit = +/- 400 us correction
+
+  Yaw rate:
+    P = 1.0 to 3.0
+    I = 0.0 to 0.05
+    D = 0.0
+
+Tuning order:
+  1. Rate roll.
+  2. Rate pitch.
+  3. Yaw rate.
+  4. Angle roll/pitch.
+  5. Altitude hold not implemented until attitude control is stable.
+
+================================================================================
+12. MOTOR MIXING DESIGN
+================================================================================
+
+Motor layout convention:
+
+           FRONT
+        M1       M2
+       CCW       CW
+          \     /
+           \   /
+            \ /
+            / \
+           /   \
+          /     \
+        M4       M3
+        CW       CCW
+           REAR
+
+Use one mixer equation family. The exact signs must be verified with the motor
+response test. Initial convention:
+
+  m1 = throttle + pitch - roll - yaw
+  m2 = throttle + pitch + roll + yaw
+  m3 = throttle - pitch + roll - yaw
+  m4 = throttle - pitch - roll + yaw
+
+Important:
+  Mixer signs may need inversion depending on estimator axis conventions and
+  motor rotation direction. This is why motor dry-run, no-prop response, and
+  direction tests are mandatory.
+
+Clamping:
+  - Disarmed: all motors = 1000 us.
+  - Armed idle: all motors = 1050-1100 us after testing ESC start threshold.
+  - Active command: clamp to [1000, 2000] us.
+  - Test mode: cap to [1000, 1100] us until explicitly expanded.
+
+Desaturation:
+  Implement basic clamping first. Add desaturation only after unit tests.
+
+================================================================================
+13. ESC OUTPUT DESIGN
+================================================================================
+
+Use MCPWM, not Arduino Servo.
+
+Default PWM:
+  Frequency = 50 Hz initially.
+  Pulse min = 1000 us.
+  Pulse max = 2000 us.
+  Disarmed = 1000 us.
+  Idle = measured ESC start threshold, likely 1050-1100 us.
+
+Boot behavior:
+  1. Configure motor GPIOs to safe output state.
+  2. Initialize MCPWM with comparator values set to 1000 us.
+  3. Only then enable timers.
+  4. Never leave ESC signal floating.
+
+ESC calibration:
+  Must be explicit, documented, and no-prop.
+  Do not run automatic ESC calibration at normal boot.
+
+Motor test mode:
+  - from DISARMED only
+  - one motor at a time first
+  - no-prop confirmation required
+  - throttle capped
+  - timeout auto-stop
+  - ESTOP always active
+
+================================================================================
+14. SAFETY STATE MACHINE
+================================================================================
+
+States:
+  BOOT
+  SENSOR_INIT
+  SENSOR_CALIBRATION_REQUIRED
+  DISARMED
+  WIFI_CONFIG
+  WIFI_CONTROL_DRY_RUN
+  PRE_ARM_CHECK
+  ARMED_IDLE
+  ACTIVE_STABILIZE
+  MOTOR_TEST_MODE
+  ESC_CALIBRATION_MODE
+  FAILSAFE
+  ERROR_LOCKOUT
+
+State output table:
+
+  State                         Motor output              WiFi allowed
+  ---------------------------------------------------------------------------
+  BOOT                          1000 us                   no
+  SENSOR_INIT                   1000 us                   no
+  SENSOR_CALIBRATION_REQUIRED   1000 us                   config only if safe
+  DISARMED                      1000 us                   yes
+  WIFI_CONFIG                   1000 us                   yes, HTTP
+  WIFI_CONTROL_DRY_RUN          1000 us forced            yes, UDP test
+  PRE_ARM_CHECK                 1000 us                   no HTTP
+  ARMED_IDLE                    idle pulse                only if WiFi-control mode approved
+  ACTIVE_STABILIZE              mixer output              only experimental UDP, no HTTP
+  MOTOR_TEST_MODE               capped test output         yes only if no-prop confirmed
+  ESC_CALIBRATION_MODE          calibration pulses         no app except ESTOP
+  FAILSAFE                      1000 us                   telemetry only
+  ERROR_LOCKOUT                 1000 us                   telemetry only
+
+Pre-arm checks:
+  1. MPU6050 detected, WHO_AM_I correct.
+  2. Calibration valid.
+  3. Gyro bias sane.
+  4. Accel magnitude sane.
+  5. Board tilt below threshold.
+  6. Input source valid.
+  7. Throttle low.
+  8. Dead-man active if WiFi-control mode.
+  9. Explicit arm command.
+  10. ESC output initialized.
+  11. No critical fault.
+  12. No motor test active.
+  13. No stale command packets.
+  14. Loop timing stable.
+  15. WiFi RSSI/packet stability acceptable if WiFi-control mode.
+  16. Battery voltage acceptable if voltage sensor exists.
+
+Mandatory disarm/failsafe triggers:
+  - ESTOP command.
+  - Dead-man release in WiFi-control mode.
+  - WiFi packet stale > 150 ms.
+  - Receiver stale > 100 ms.
+  - IMU persistent failure.
+  - Excessive loop overruns.
+  - Excessive tilt.
+  - Brownout.
+  - Control task watchdog timeout.
+  - App background/lock event command.
+
+================================================================================
+15. TELEMETRY AND LOGGING
+================================================================================
+
+UART remains the primary debug truth source.
+
+CSV telemetry rates:
+  Sensor-only: 20-50 Hz.
+  Integrated bench: 20 Hz.
+  Active motor tests: 10-20 Hz.
+  WiFi telemetry: 10-20 Hz.
+
+Do not log from the control loop directly. Queue snapshots or use a shared
+snapshot copied by telemetry_task.
+
+Core telemetry fields:
+  time_ms,state,loop_us,missed_deadlines,
+  imu_ok,baro_ok,calibrated,i2c_errors,
+  roll_deg,pitch_deg,yaw_rate_dps,
+  cmd_roll,cmd_pitch,cmd_yaw,cmd_throttle,input_source,input_age_ms,
+  pid_roll,pid_pitch,pid_yaw,
+  m1_us,m2_us,m3_us,m4_us,
+  wifi_packet_age_ms,wifi_rssi,wifi_seq,
+  failsafe_reason
+
+================================================================================
+16. DEVELOPMENT PHASES
+================================================================================
+
+Phase 0: Project skeleton
+-------------------------
+Objective:
+  Create ESP-IDF C++ project structure, board_config, README, docs skeleton.
+
+Allowed:
+  main, board_config, root CMake, sdkconfig.defaults.
+
+Forbidden:
+  Sensors, motor output, WiFi control, PID.
+
+Pass:
+  Build, flash, serial hello, optional LED blink.
+
+Phase 1: I2C scan + sensor ID checks
+------------------------------------
+Objective:
+  Detect MPU6050 and BMP280.
+
+Implement:
+  i2c_bus, partial mpu6050, partial bmp280.
+
+Correct constants:
+  MPU6050 WHO_AM_I = 0x68.
+  BMP280 chip ID = 0x58.
+
+Pass:
+  I2C scan shows expected addresses and ID checks pass.
+
+Phase 2: MPU6050 raw/scaled data + calibration
+----------------------------------------------
+Objective:
+  Read IMU, convert units, calibrate, save to NVS.
+
+Pass:
+  Gyro near zero stationary, accel magnitude near 1 g, NVS reload works.
+
+Phase 3: BMP280 pressure/altitude telemetry
+-------------------------------------------
+Objective:
+  Read compensated pressure/temp and relative altitude.
+
+Pass:
+  Pressure plausible, temperature plausible, altitude changes when lifted.
+
+Phase 4: Sensor telemetry and validation app
+--------------------------------------------
+Objective:
+  Combined telemetry stream and sensor health flags.
+
+Pass:
+  30-60 minute run, no crashes, no unexplained I2C errors.
+
+Phase 5: Attitude estimator
+---------------------------
+Objective:
+  Complementary filter roll/pitch.
+
+Pass:
+  Manual tilt tracks correctly, drift acceptable.
+
+Phase 6: Input abstraction
+--------------------------
+Objective:
+  Unified ControlInput struct with stub and optional RMT receiver.
+
+Pass:
+  Stub stable. Receiver if available. Failsafe on stale input.
+
+Phase 7: WiFi config server, DISARMED only
+------------------------------------------
+Objective:
+  ESP32 SoftAP + HTTP status/config/PID pages from Android browser.
+
+Implement:
+  wifi_manager, http_config_server.
+
+Forbidden:
+  Active motor control over WiFi.
+
+Pass:
+  Android phone connects, reads status, triggers sensor calibration only while
+  DISARMED, cannot arm motors.
+
+Phase 8: MCPWM ESC signal generation, no motor power
+----------------------------------------------------
+Objective:
+  Generate correct PWM on four pins.
+
+Pass:
+  Logic analyzer/scope shows 1000, 1500, 2000 us within tolerance. Boot output
+  is safe. ESTOP sets 1000 us.
+
+Phase 9: Safety state machine base
+----------------------------------
+Objective:
+  Implement BOOT, SENSOR_INIT, DISARMED, PRE_ARM_CHECK, FAILSAFE,
+  ERROR_LOCKOUT.
+
+Pass:
+  Unit tests for transitions. Pre-arm blocks when conditions fail.
+
+Phase 10: Motor test mode, no prop
+----------------------------------
+Objective:
+  Controlled single-motor spin at capped throttle.
+
+Pass:
+  One motor spins smoothly at low pulse, timeout works, ESTOP works.
+
+Phase 11: PID controller unit tests
+----------------------------------
+Objective:
+  PID math only. No real motor output.
+
+Pass:
+  Step, ramp, clamp, anti-windup, reset tests pass.
+
+Phase 12: PID with real IMU, motors disabled
+--------------------------------------------
+Objective:
+  IMU -> estimator -> PID -> telemetry. Motor outputs forced to 1000 us.
+
+Pass:
+  Tilt board, PID responds in expected direction. Motors do not move.
+
+Phase 13: Motor mixer unit tests and dry-run
+--------------------------------------------
+Objective:
+  Quad X mixing and saturation.
+
+Pass:
+  Unit tests verify known commands. Dry-run scope output changes correctly with
+  tilt while ESC power disconnected.
+
+Phase 14: WiFi UDP control dry-run
+----------------------------------
+Objective:
+  Android app sends UDP control packets. Firmware parses into ControlInput but
+  motor outputs remain forced to 1000 us.
+
+Implement:
+  udp_control_receiver, packet parser, CRC, sequence, watchdog, telemetry.
+
+Pass:
+  30-minute dry-run with stable packet rate. Packet-loss test triggers input
+  invalid within 150 ms. Dead-man release forces throttle zero.
+
+Phase 15: Android app MVP
+-------------------------
+Objective:
+  Simple native Android app for telemetry + UDP control dry-run.
+
+App features:
+  Connection status, state, ESTOP, dead-man, throttle, roll/pitch joystick,
+  yaw, telemetry display, packet-rate indicator.
+
+Pass:
+  App sends 50 Hz command packets. ESP32 telemetry confirms values and watchdog
+  behavior.
+
+Phase 16: Integrated no-prop armed idle + PID motor response
+------------------------------------------------------------
+Objective:
+  Full system no-prop. Motor idle and PID changes motor speeds softly.
+
+Pass:
+  Directional response correct. Disarm stops motors. Failsafe stops motors.
+
+Phase 17: WiFi no-prop active-control experiment
+------------------------------------------------
+Objective:
+  WiFi app controls throttle/attitude command with no props and strict caps.
+
+Pass:
+  No packet loss fault. Dead-man and app background instantly cut throttle.
+  Motor output capped. No loop overruns.
+
+Phase 18: Full bench integration
+--------------------------------
+Objective:
+  30-minute no-prop integration, all systems.
+
+Pass:
+  No I2C error storms, no missed deadlines, no watchdog resets, all failsafes
+  tested repeatedly.
+
+Phase 19: Pre-propeller readiness review
+----------------------------------------
+Objective:
+  Documentation-only gate.
+
+Pass:
+  Every phase result reviewed. Motor order and direction verified. ESC
+  calibration verified. Emergency stop verified. WiFi-control mode either
+  approved for tethered-only testing or rejected.
+
+Phase 20: Tethered propeller test
+---------------------------------
+Objective:
+  Propellers allowed only after Phase 19 pass.
+
+Pass:
+  Tethered spool-up, immediate disarm response, no tip-over, logs reviewed.
+
+Phase 21: First hover attempt
+-----------------------------
+Objective:
+  Open outdoor low hover, 10-20 cm, few seconds.
+
+Recommendation:
+  If using WiFi as command source, keep this tethered until repeated stable
+  tests pass. A phone touchscreen is a lousy transmitter. Useful, yes. Elegant,
+  maybe. Trustworthy, not yet.
+
+================================================================================
+17. COPY-READY CODEX PROMPTS
+================================================================================
+
+Use one prompt at a time. Do not mix phases. Do not let Codex “also implement”
+future features. Future-feature creep is how projects rot.
+
+################################################################################
+PROMPT 1: ESP-IDF skeleton + board config
+################################################################################
+You are working on an ESP-IDF C++17 firmware project for an experimental ESP32
+DevKit V1 flight controller.
+
+Create only the project skeleton and board configuration.
+
+Scope:
+- Create root CMakeLists.txt.
+- Create main/app_main.cpp with serial startup log and optional LED blink.
+- Create main/CMakeLists.txt.
+- Create components/board_config with include/board_config.h.
+- Add sdkconfig.defaults.
+- Add README.md with hardware target and safety warning.
+
+Hardware target:
+- ESP32 DevKit V1
+- MPU6050
+- BMP280
+- 30A ESC
+- 2212 2200KV motors
+
+Rules:
+- No sensor drivers yet.
+- No motor output.
+- No MCPWM.
+- No WiFi.
+- No PID.
+- No safety state machine yet.
+
+Report back:
+- Files created/modified.
+- Build result.
+- Any assumptions.
+
+################################################################################
+PROMPT 2: I2C scan + MPU6050/BMP280 ID checks
+################################################################################
+Implement the first hardware detection phase.
+
+Scope:
+- Implement components/i2c_bus with ESP-IDF i2c_master driver wrappers.
+- Implement I2C scan.
+- Implement partial mpu6050 driver with WHO_AM_I read only.
+- Implement partial bmp280 driver with chip ID read only.
+- Update app_main to initialize I2C, scan bus, check sensor IDs, print status.
+
+Correct constants:
+- MPU6050 I2C address: 0x68 by default.
+- MPU6050 WHO_AM_I expected value: 0x68.
+- BMP280 I2C address: 0x76 or 0x77.
+- BMP280 chip ID expected value: 0x58.
+
+Rules:
+- No PID.
+- No motor output.
+- No MCPWM.
+- No WiFi.
+- If MPU6050 ID fails, log critical error.
+- If BMP280 ID fails, log warning because barometer is optional for attitude mode.
+
+Tests:
+- Build.
+- Flash.
+- Serial monitor shows I2C scan and ID values.
+
+Report back:
+- Build output summary.
+- I2C scan result.
+- MPU6050 WHO_AM_I value.
+- BMP280 chip ID value.
+
+################################################################################
+PROMPT 3: MPU6050 raw/scaled data + calibration + NVS
+################################################################################
+Complete MPU6050 reading and calibration.
+
+Scope:
+- Extend mpu6050 driver for 14-byte burst read from accel/temp/gyro registers.
+- Convert to g, deg/s, and deg C.
+- Add calibration component with stillness detection.
+- Add config_nvs component for calibration save/load.
+- Update app_main to run calibration on UART command and output IMU CSV telemetry.
+
+Rules:
+- No BMP280 changes except build integration if needed.
+- No motor output.
+- No WiFi.
+- No PID.
+
+Pass criteria:
+- Gyro near zero when stationary.
+- Accel magnitude near 1 g when stationary.
+- Calibration saves and reloads after reboot.
+
+Report back:
+- Calibration values.
+- Sample CSV lines.
+- NVS save/load result.
+
+################################################################################
+PROMPT 4: BMP280 compensated pressure/altitude telemetry
+################################################################################
+Complete BMP280 driver.
+
+Scope:
+- Read BMP280 calibration coefficients.
+- Compute compensated pressure and temperature.
+- Compute relative altitude from ground pressure baseline.
+- Add simple altitude_estimator low-pass filter.
+- Update telemetry to include BMP280 data.
+
+Correct constant:
+- BMP280 chip ID = 0x58.
+
+Rules:
+- BMP280 must not run in the fast control loop.
+- BMP280 failure is non-critical.
+- No motor output.
+- No PID.
+
+Report back:
+- Pressure, temperature, altitude sample logs.
+- Baseline method used.
+
+################################################################################
+PROMPT 5: Sensor validation + telemetry logger
+################################################################################
+Build the sensor-only application.
+
+Scope:
+- Implement sensor health flags.
+- Implement telemetry_logger with CSV header and rows.
+- Run IMU and barometer telemetry together.
+- Track I2C error counts and consecutive failures.
+
+Rules:
+- No motor output.
+- No PID.
+- No WiFi control.
+
+Pass criteria:
+- 30-minute sensor run without crashes.
+- Health flags behave correctly.
+- CSV is parseable.
+
+Report back:
+- CSV sample.
+- Error counters.
+- Free heap after run.
+
+################################################################################
+PROMPT 6: Complementary attitude estimator
+################################################################################
+Implement roll/pitch estimation.
+
+Scope:
+- Add attitude_estimator component.
+- Complementary filter using gyro integration and accelerometer correction.
+- Gate accelerometer correction when accel magnitude is implausible.
+- Telemetry estimated roll/pitch and raw accel roll/pitch.
+
+Rules:
+- No PID.
+- No motor output.
+
+Pass criteria:
+- Level board near 0 deg.
+- 30 deg manual tilt tracks correctly.
+- Stationary drift acceptable.
+
+Report back:
+- CSV sample of tilt test.
+- Any axis/sign assumptions.
+
+################################################################################
+PROMPT 7: Input abstraction + stub + optional RMT receiver
+################################################################################
+Implement control input abstraction.
+
+Scope:
+- Add input component.
+- Define ControlInput struct.
+- Implement input_stub.
+- Implement receiver_rmt only if RMT support is practical now; otherwise create
+  interface and stub implementation.
+- Add stale input detection.
+
+Rules:
+- Stub cannot arm active flight mode.
+- No motor output changes.
+- No PID.
+
+Report back:
+- Input telemetry output.
+- Stale/failsafe behavior.
+
+################################################################################
+PROMPT 8: WiFi config server, DISARMED only
+################################################################################
+Add WiFi for telemetry/config only.
+
+Scope:
+- Add wifi_control component.
+- Implement SoftAP mode.
+- Implement HTTP endpoints: /status, /telemetry/latest, /pid GET placeholder,
+  /calibrate/imu command if safe.
+- Add state guard: HTTP config server only operates in DISARMED/WIFI_CONFIG.
+
+Rules:
+- No active motor control over WiFi.
+- No UDP joystick yet.
+- HTTP cannot arm.
+- HTTP cannot bypass safety.
+- If motor output exists later, WiFi config mode must force motor output to 1000 us.
+
+Report back:
+- SSID/IP.
+- Endpoint test results from Android browser.
+
+################################################################################
+PROMPT 9: MCPWM ESC output, no motor power
+################################################################################
+Implement ESC PWM output safely.
+
+Scope:
+- Add motor_output/esc_mcpwm.
+- Configure 4 ESC outputs at 50 Hz.
+- Pulse range 1000-2000 us.
+- Init all outputs to 1000 us before enabling timers.
+- Add emergency_stop function.
+- Add UART test command to set pulse only while in a safe test state.
+
+Rules:
+- Do not connect ESC power during this phase.
+- No motor spin.
+- No PID integration.
+
+Pass criteria:
+- Scope/logic analyzer verifies 1000/1500/2000 us.
+- Boot pulse never exceeds 1000 us.
+- ESTOP returns outputs to 1000 us.
+
+Report back:
+- Measured pulse widths.
+- Any MCPWM resource assumptions.
+
+################################################################################
+PROMPT 10: Safety state machine base
+################################################################################
+Implement safety states and pre-arm checks.
+
+Scope:
+- Add safety_state_machine.
+- Add arming_manager.
+- Add failsafe_manager.
+- Implement BOOT, SENSOR_INIT, DISARMED, WIFI_CONFIG, PRE_ARM_CHECK,
+  FAILSAFE, ERROR_LOCKOUT.
+- Wire in sensor health and input validity.
+
+Rules:
+- Motor output must be 1000 us unless explicitly in a later motor-test state.
+- ERROR_LOCKOUT requires power cycle.
+- Pre-arm check must explain failure reason.
+
+Report back:
+- State transition log.
+- Unit test results if created.
+
+################################################################################
+PROMPT 11: Motor test mode, no propellers
+################################################################################
+Implement safe motor test mode.
+
+Scope:
+- Add motor_test_mode.
+- Enter only from DISARMED.
+- Require exact user confirmation: CONFIRM_NOPROP.
+- One motor at a time.
+- Throttle cap 1100 us initially.
+- Ramp limiter.
+- 30-second timeout.
+- ESTOP cancels immediately.
+
+Rules:
+- No PID.
+- No propellers.
+
+Report back:
+- Test sequence.
+- Safety gates implemented.
+
+################################################################################
+PROMPT 12: PID controller unit tests
+################################################################################
+Implement PID math only.
+
+Scope:
+- Add pid_controller and pid_config.
+- Implement cascaded angle/rate support.
+- Anti-windup.
+- Derivative-on-measurement or filtered derivative.
+- Integrator reset.
+- Output clamping.
+- Unity unit tests.
+
+Rules:
+- No motor integration.
+- No real IMU integration in this prompt.
+
+Report back:
+- Unit test output.
+
+################################################################################
+PROMPT 13: PID with real IMU, motors disabled
+################################################################################
+Integrate IMU -> estimator -> PID for telemetry only.
+
+Scope:
+- Use real attitude estimate.
+- Use stub or receiver input.
+- Compute PID output.
+- Log PID terms.
+- Force all motor outputs to 1000 us regardless of PID.
+
+Rules:
+- No motor movement.
+- PID output is observation only.
+
+Report back:
+- Tilt test CSV.
+- Direction/sign analysis.
+
+################################################################################
+PROMPT 14: Quad X motor mixer dry-run
+################################################################################
+Implement motor_mixer and dry-run it.
+
+Scope:
+- Use fixed motor convention: M1 front-left, M2 front-right, M3 rear-right,
+  M4 rear-left.
+- Implement mixer equations.
+- Implement clamping.
+- Add unit tests for roll/pitch/yaw effects.
+- Dry-run with MCPWM while ESC power disconnected.
+
+Rules:
+- No motor power.
+- No propellers.
+
+Report back:
+- Unit test output.
+- Dry-run measured PWM changes.
+
+################################################################################
+PROMPT 15: WiFi UDP control dry-run protocol
+################################################################################
+Implement Android WiFi command input dry-run.
+
+Scope:
+- Add udp_control_receiver.
+- Define WifiControlPacketV1.
+- Validate magic, version, sequence, CRC.
+- Convert packet to ControlInput.
+- Packet watchdog: invalid if no packet for 150 ms.
+- Dead-man false forces throttle zero.
+- ESTOP true triggers emergency stop.
+- Motor outputs remain forced to 1000 us.
+
+Rules:
+- No active motor response from WiFi yet.
+- HTTP server disabled during UDP dry-run except /status if safe.
+
+Report back:
+- Packet format.
+- Dry-run telemetry.
+- Packet-loss test result.
+
+################################################################################
+PROMPT 16: Android app MVP prompt
+################################################################################
+Create a simple native Android Kotlin + Jetpack Compose app for ESP32 flight
+controller WiFi dry-run control.
+
+Scope:
+- Connect to ESP32 SoftAP manually through Android WiFi settings.
+- App target IP: 192.168.4.1.
+- Send UDP WifiControlPacketV1 at 50 Hz.
+- UI: connection status, safety state, telemetry age, ESTOP, dead-man hold,
+  throttle slider, roll/pitch joystick, yaw slider.
+- App receives telemetry UDP or polls /status for early version.
+- If app goes background or screen locks, send disarm/ESTOP packets for 500 ms.
+
+Rules:
+- App starts disarmed every launch.
+- App must never auto-arm.
+- Dead-man required for nonzero throttle.
+- Big red ESTOP always visible.
+
+Report back:
+- Android project structure.
+- How to run/install.
+- Packet send rate verification.
+
+################################################################################
+PROMPT 17: Integrated no-prop active motor response
+################################################################################
+Integrate all firmware components for no-prop motor response.
+
+Scope:
+- Sensors, estimator, input, PID, mixer, MCPWM, safety state machine.
+- Arm to idle only after pre-arm checks.
+- Tilt board and verify motor response direction.
+- Keep output capped around idle during test.
+
+Rules:
+- No propellers.
+- Emergency stop tested before motor spin.
+- If response direction is wrong, do not patch randomly. Identify whether the
+  sign error is estimator axis, PID output, mixer sign, or motor numbering.
+
+Report back:
+- State log.
+- Motor response description.
+- CSV with angles, PID, motor pulses.
+
+################################################################################
+PROMPT 18: WiFi no-prop active-control experiment
+################################################################################
+Enable WiFi command input for no-prop motor response only.
+
+Scope:
+- Use Android UDP ControlInput as selected source.
+- Dead-man required.
+- Packet watchdog required.
+- Throttle capped to <= 10% normalized or equivalent safe pulse cap.
+- No propellers.
+- HTTP config disabled during active UDP control.
+
+Rules:
+- No propellers.
+- If packet loss occurs, motor output immediately returns to 1000 us.
+- If app background/lock detected, disarm.
+
+Report back:
+- Packet stability logs.
+- Failsafe tests.
+- Motor response results.
+
+################################################################################
+PROMPT 19: Full bench integration review
+################################################################################
+Run and document full no-prop bench integration.
+
+Scope:
+- 30-minute integrated run.
+- 100 arm/disarm cycles if practical.
+- Multiple ESTOP tests.
+- Receiver/WiFi stale input tests.
+- Motor test entries/exits.
+- Loop timing analysis.
+- I2C error analysis.
+
+Rules:
+- No propellers.
+- Code changes only for bug fixes.
+
+Report back:
+- Summary table of tests.
+- Failures and fixes.
+- Remaining risks.
+
+################################################################################
+PROMPT 20: Pre-propeller readiness review
+################################################################################
+Perform documentation-only readiness review.
+
+Scope:
+- Create docs/pre_propeller_review.md.
+- Review all phases.
+- Verify sensor, PID, motor, failsafe, WiFi, Android, and timing criteria.
+- Explicitly decide whether propellers are allowed.
+- If not ready, list blockers.
+
+Rules:
+- No code changes.
+- No propeller testing.
+
+Report back:
+- PASS/FAIL decision.
+- Blockers.
+- First tethered test checklist only if PASS.
+
+================================================================================
+18. DEFINITION OF DONE
+================================================================================
+
+A. Sensor application done:
+  - MPU6050 detected at 0x68.
+  - MPU6050 WHO_AM_I = 0x68.
+  - BMP280 detected if present.
+  - BMP280 chip ID = 0x58.
+  - Calibration saved and reloaded.
+  - Telemetry stable.
+
+B. WiFi config done:
+  - Android browser can view /status.
+  - Calibration/PID endpoints work only when DISARMED.
+  - HTTP cannot arm motors.
+
+C. ESC output done:
+  - Scope verifies 1000/1500/2000 us.
+  - Boot output safe.
+  - ESTOP safe.
+
+D. Motor test done:
+  - No-prop confirmation enforced.
+  - Single motor test works.
+  - Timeout works.
+  - ESTOP works.
+
+E. PID done:
+  - Unit tests pass.
+  - PID zero when disarmed.
+  - PID reset on disarm/failsafe.
+  - PID logs are readable.
+
+F. Android WiFi dry-run done:
+  - UDP packets at 50 Hz.
+  - Firmware validates sequence and CRC.
+  - Watchdog detects stale packet.
+  - Dead-man works.
+  - App background triggers disarm/ESTOP.
+
+G. Integrated no-prop done:
+  - Motor response direction verified.
+  - Failsafe stops motors.
+  - No loop-overrun storm.
+  - No I2C error storm.
+
+H. Pre-propeller done:
+  - Motor order verified.
+  - Motor direction verified.
+  - ESC calibration verified.
+  - Emergency stop verified repeatedly.
+  - Android WiFi mode either approved only for tethered experiment or rejected.
+
+================================================================================
+19. FINAL RECOMMENDATIONS
+================================================================================
+
+1. Build the sensor app first. It is the spine.
+2. Use ESP-IDF C++ components. Do not port Arduino monoliths.
+3. Keep WiFi config separate from WiFi active command mode.
+4. Use Android browser UI first, native app later.
+5. Use UDP for active commands, HTTP only for configuration.
+6. Use RMT if you later add RC receiver input.
+7. Use UART CSV logs even when WiFi telemetry exists.
+8. Never trust the app more than firmware safety.
+9. Never patch mixer signs blindly. Use tests to locate the sign error.
+10. Do not chase altitude hold. Attitude stability first.
+11. Add a physical ESC/battery power disconnect. Software ESTOP is not enough.
+12. If a test fails, stop the phase. Do not “just try the next one.” That is not
+    progress; that is denial wearing safety goggles.
+
+================================================================================
+END OF CANONICAL PLAN
+================================================================================
