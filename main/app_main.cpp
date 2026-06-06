@@ -33,7 +33,7 @@ extern "C" void app_main(void) {
     io_conf.pin_bit_mask = (1ULL << BOARD_ONBOARD_LED_GPIO);
     io_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
     io_conf.pull_up_en = GPIO_PULLUP_DISABLE;
-    gpio_config(&io_conf);
+    ESP_ERROR_CHECK(gpio_config(&io_conf));
     
     while (1) {
         gpio_set_level(BOARD_ONBOARD_LED_GPIO, 1);
