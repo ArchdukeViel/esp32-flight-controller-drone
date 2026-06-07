@@ -4,7 +4,7 @@
 
 static const char* TAG = "pid";
 
-static pid_controller_t s_controllers[PID_COUNT] = {0};
+static pid_controller_t s_controllers[PID_COUNT] = {};
 
 static void pid_controller_init(pid_controller_t* c, float kp, float ki, float kd)
 {

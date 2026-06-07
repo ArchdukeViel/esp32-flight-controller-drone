@@ -11,8 +11,8 @@ static const char* TAG = "bmp280";
 #define BMP280_READ_TIMEOUT_MS 10
 
 // Static state
-static bmp280_error_count_t s_error_counts = {0};
-static bmp280_calib_t s_calib = {0};
+static bmp280_error_count_t s_error_counts = {};
+static bmp280_calib_t s_calib = {};
 static uint8_t s_addr = 0;
 static bool s_initialized = false;
 static float s_sea_level = BMP280_SEA_LEVEL_PRESSURE;

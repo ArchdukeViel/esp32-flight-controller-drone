@@ -1,10 +1,12 @@
 #include "estimator.h"
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "math.h"
 
 static const char* TAG = "estimator";
 
-static estimator_state_t s_state = {0};
+static estimator_state_t s_state = {};
 static float s_cf_alpha = ESTIMATOR_CF_ALPHA;
 static float s_alt_alpha = ESTIMATOR_ALT_ALPHA;
 static bool s_first_update = true;

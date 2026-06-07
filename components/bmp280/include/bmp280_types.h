@@ -1,19 +1,27 @@
 #pragma once
 
 #include <stdint.h>
+#include <stdbool.h>
 
 /**
  * @file bmp280_types.h
- * @brief BMP280 data structures for raw and compensated sensor readings.
+ * @brief BMP280 data structures for raw/compensated reads, calibration, and error counting.
  */
 
- /** Raw ADC data from registers 0xF7-0xFC (6 bytes) */
+/** Raw ADC values */
 typedef struct {
-    uint32_t press_raw;  ///< Pressure ADC (20 bits, from 0xF7-0xF9)
-    uint32_t temp_raw;   ///< Temperature ADC (20 bits, from 0xFA-0xFC)
+    uint32_t press_raw;  // 20-bit raw pressure ADC
+    uint32_t temp_raw;   // 20-bit raw temperature ADC
 } bmp280_raw_t;
 
-/** Calibration coefficients from registers 0x88-0xA1 (24 bytes) */
+/** Compensated sensor data in SI units */
+typedef struct {
+    float temperature;  // degrees C
+    float pressure;     // Pa
+    float altitude;     // meters (barometric formula)
+} bmp280_compensated_t;
+
+/** BMP280 calibration coefficients (24 bytes from registers 0x88-0x9F) */
 typedef struct {
     uint16_t dig_T1;
     int16_t  dig_T2;
@@ -29,17 +37,9 @@ typedef struct {
     int16_t  dig_P9;
 } bmp280_calib_t;
 
-/** Compensated sensor data in SI units */
-typedef struct {
-    float temperature;  ///< Temperature [degrees C]
-    float pressure;     ///< Pressure [Pa]
-    float altitude;     ///< Altitude [m] relative to sea level (101325 Pa)
-} bmp280_compensated_t;
-
 /** Error counters for diagnostics */
 typedef struct {
     uint32_t init_errors;
     uint32_t read_errors;
-    uint32_t crc_errors;
     uint32_t last_error_tick;
 } bmp280_error_count_t;

@@ -1,7 +1,7 @@
 Prompt 10 — MCPWM Motor Output (4 channels, 1000-2000 µs PWM)
 ======================================
 
-Status: Build gate PENDING. Hardware gate PENDING.
+Status: Build gate PASSED. Hardware gate PENDING.
 
 Hardware result (2026-06-07):
 - ESP32 DevKit V1 powered via USB
@@ -12,6 +12,6 @@ Hardware result (2026-06-07):
 - Estimator: Complementary filter (attitude) + altitude fusion working
 - PID: 3-axis with anti-windup, gain bounds working
 - Motor Mixer: Quad X mixing matrix working
-- Motor Output: MCPWM 4-channel driver created, build gate PENDING
+- Motor Output: MCPWM 4-channel driver created, build gate PASSED
 
 Next: Prompt 11 - Safety State Machine (arming, failsafe, pre-arm checks)

@@ -1,7 +1,7 @@
 #include "motor_output.h"
 #include "board_config.h"
 #include "esp_log.h"
-#include "driver/mcpwm.h"
+#include "driver/mcpwm_prelude.h"
 #include "driver/gpio.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -17,7 +17,7 @@ static motor_output_config_t s_config = {
     .inverted = false
 };
 
-static motor_output_state_t s_state = {0};
+static motor_output_state_t s_state = {};
 static bool s_initialized = false;
 static bool s_armed = false;
 
@@ -27,12 +27,16 @@ static mcpwm_oper_handle_t s_operators[4] = {NULL};
 static mcpwm_cmpr_handle_t s_comparators[4] = {NULL};
 static mcpwm_gen_handle_t s_generators[4] = {NULL};
 
-// Motor GPIO pins (from board_config)
+// Motor GPIO pins (mapped from board_config ESC_Mx_GPIO to mixer index)
+// mixer[0] = FR  -> ESC_M2_GPIO (19)
+// mixer[1] = FL  -> ESC_M1_GPIO (18)
+// mixer[2] = RR  -> ESC_M3_GPIO (23)
+// mixer[3] = RL  -> ESC_M4_GPIO (25)
 static const int s_motor_gpios[4] = {
-    MOTOR_0_GPIO,
-    MOTOR_1_GPIO,
-    MOTOR_2_GPIO,
-    MOTOR_3_GPIO
+    ESC_M2_GPIO,
+    ESC_M1_GPIO,
+    ESC_M3_GPIO,
+    ESC_M4_GPIO
 };
 
 static inline uint32_t pulse_us_to_ticks(uint16_t pulse_us, uint32_t freq_hz)
@@ -50,8 +54,14 @@ static esp_err_t setup_mcpwm_timer(void)
         .group_id = 0,
         .clk_src = MCPWM_TIMER_CLK_SRC_DEFAULT,
         .resolution_hz = 10000000, // 10 MHz
-        .period_ticks = 10000000 / s_config.frequency_hz,
         .count_mode = MCPWM_TIMER_COUNT_MODE_UP,
+        .period_ticks = 10000000 / s_config.frequency_hz,
+        .intr_priority = 0,
+        .flags = {
+            .update_period_on_empty = false,
+            .update_period_on_sync = false,
+            .allow_pd = false,
+        },
     };
     return mcpwm_new_timer(&timer_config, &s_timer);
 }
@@ -60,7 +70,15 @@ static esp_err_t setup_mcpwm_operators(void)
 {
     mcpwm_operator_config_t oper_config = {
         .group_id = 0,
-        .clk_src = MCPWM_OPERATOR_CLK_SRC_DEFAULT,
+        .intr_priority = 0,
+        .flags = {
+            .update_gen_action_on_tez = true,
+            .update_gen_action_on_tep = false,
+            .update_gen_action_on_sync = false,
+            .update_dead_time_on_tez = false,
+            .update_dead_time_on_tep = false,
+            .update_dead_time_on_sync = false,
+        },
     };
     for (int i = 0; i < 4; i++) {
         esp_err_t ret = mcpwm_new_operator(&oper_config, &s_operators[i]);
@@ -74,7 +92,12 @@ static esp_err_t setup_mcpwm_operators(void)
 static esp_err_t setup_mcpwm_comparators(void)
 {
     mcpwm_comparator_config_t cmp_config = {
-        .flags = { .update_cmp_on_tez = true },
+        .intr_priority = 0,
+        .flags = {
+            .update_cmp_on_tez = true,
+            .update_cmp_on_tep = false,
+            .update_cmp_on_sync = false,
+        },
     };
     for (int i = 0; i < 4; i++) {
         esp_err_t ret = mcpwm_new_comparator(s_operators[i], &cmp_config, &s_comparators[i]);
@@ -87,6 +110,9 @@ static esp_err_t setup_mcpwm_generators(void)
 {
     mcpwm_generator_config_t gen_config = {
         .gen_gpio_num = -1, // Set per motor below
+        .flags = {
+            .invert_pwm = false,
+        },
     };
     for (int i = 0; i < 4; i++) {
         gen_config.gen_gpio_num = s_motor_gpios[i];
@@ -142,7 +168,10 @@ esp_err_t motor_output_init(const motor_output_config_t* config)
 
     // Initialize MCPWM
     esp_err_t ret = setup_mcpwm_timer();
-    if (ret != ESP_OK) { ESP_LOGE(TAG, "Timer init failed: %s", esp_err_to_name(ret)); return ret; }
+    if (ret != ESP_OK) { ESP_LOGE(TAG, "Timer create failed: %s", esp_err_to_name(ret)); return ret; }
+
+    ret = mcpwm_timer_enable(s_timer);
+    if (ret != ESP_OK) { ESP_LOGE(TAG, "Timer enable failed: %s", esp_err_to_name(ret)); return ret; }
 
     ret = setup_mcpwm_operators();
     if (ret != ESP_OK) { ESP_LOGE(TAG, "Operator init failed: %s", esp_err_to_name(ret)); return ret; }
@@ -176,6 +205,7 @@ void motor_output_deinit(void)
 
     if (s_timer) {
         mcpwm_timer_start_stop(s_timer, MCPWM_TIMER_STOP_EMPTY);
+        mcpwm_timer_disable(s_timer);
         mcpwm_del_timer(s_timer);
         s_timer = NULL;
     }

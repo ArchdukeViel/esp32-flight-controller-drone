@@ -2,6 +2,8 @@
 #include "board_config.h"
 #include "i2c_bus.h"
 #include "esp_log.h"
+#include "nvs_flash.h"
+#include "nvs.h"
 #include "freertos/FreeRTOS.h"
 #include "math.h"
 
@@ -9,8 +11,12 @@ static const char* TAG = "mpu6050";
 
 #define MPU6050_READ_TIMEOUT_MS 5
 
+// Static calibration offsets (internal state)
+static mpu6050_calibration_t s_cal = {};
+static bool s_cal_valid = false;
+
 // Static error counters
-static mpu6050_error_count_t s_error_counts = {0};
+static mpu6050_error_count_t s_error_counts = {};
 
 static inline void increment_read_error(void) {
     s_error_counts.read_errors++;
@@ -112,7 +118,7 @@ esp_err_t mpu6050_read_raw(mpu6050_raw_t* raw)
 
     // Read 14 bytes starting from register 0x3B (ACCEL_XOUT_H)
     uint8_t reg = MPU6050_REG_ACCEL_XOUT_H;
-    uint8_t data[14] = {0};
+    uint8_t data[14] = {};
 
     ret = i2c_master_transmit_receive(dev_handle, &reg, 1, data, 14, pdMS_TO_TICKS(MPU6050_READ_TIMEOUT_MS));
     if (ret != ESP_OK) {
@@ -179,4 +185,141 @@ void mpu6050_reset_error_counts(void)
     s_error_counts.read_errors = 0;
     s_error_counts.crc_errors = 0;
     s_error_counts.last_error_tick = 0;
+}
+
+esp_err_t mpu6050_load_calibration(void)
+{
+    nvs_handle_t handle;
+    esp_err_t ret = nvs_open(MPU6050_NVS_NAMESPACE, NVS_READONLY, &handle);
+    if (ret != ESP_OK) {
+        s_cal_valid = false;
+        memset(&s_cal, 0, sizeof(s_cal));
+        if (ret == ESP_ERR_NVS_NOT_FOUND) {
+            ESP_LOGW(TAG, "No calibration in NVS, using zeros");
+            return ESP_ERR_NOT_FOUND;
+        }
+        ESP_LOGE(TAG, "NVS open failed: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
+    mpu6050_calibration_t cal;
+    size_t len = sizeof(cal);
+    ret = nvs_get_blob(handle, MPU6050_NVS_KEY_CAL, &cal, &len);
+    if (ret != ESP_OK || len != sizeof(cal)) {
+        nvs_close(handle);
+        s_cal_valid = false;
+        memset(&s_cal, 0, sizeof(s_cal));
+        if (ret == ESP_ERR_NVS_NOT_FOUND) {
+            ESP_LOGW(TAG, "No calibration blob in NVS, using zeros");
+            return ESP_ERR_NOT_FOUND;
+        }
+        ESP_LOGE(TAG, "NVS get failed: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
+    s_cal = cal;
+    s_cal_valid = true;
+    nvs_close(handle);
+    ESP_LOGI(TAG, "Calibration loaded from NVS");
+    return ESP_OK;
+}
+
+esp_err_t mpu6050_save_calibration(void)
+{
+    if (!s_cal_valid) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    nvs_handle_t handle;
+    esp_err_t ret = nvs_open(MPU6050_NVS_NAMESPACE, NVS_READWRITE, &handle);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "NVS open failed: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
+    ret = nvs_set_blob(handle, MPU6050_NVS_KEY_CAL, &s_cal, sizeof(s_cal));
+    if (ret != ESP_OK) {
+        nvs_close(handle);
+        ESP_LOGE(TAG, "NVS set failed: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
+    ret = nvs_commit(handle);
+    nvs_close(handle);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "NVS commit failed: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
+    ESP_LOGI(TAG, "Calibration saved to NVS");
+    return ESP_OK;
+}
+
+esp_err_t mpu6050_calibrate(mpu6050_calibration_t* cal)
+{
+    if (cal == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    int64_t sum_ax = 0, sum_ay = 0, sum_az = 0;
+    int64_t sum_gx = 0, sum_gy = 0, sum_gz = 0;
+
+    for (int i = 0; i < MPU6050_CAL_SAMPLES; i++) {
+        mpu6050_raw_t raw;
+        esp_err_t ret = mpu6050_read_raw(&raw);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "Calibration sample %d failed: %s", i, esp_err_to_name(ret));
+            return ret;
+        }
+        sum_ax += raw.ax;
+        sum_ay += raw.ay;
+        sum_az += raw.az;
+        sum_gx += raw.gx;
+        sum_gy += raw.gy;
+        sum_gz += raw.gz;
+        vTaskDelay(pdMS_TO_TICKS(MPU6050_CAL_DELAY_MS));
+    }
+
+    // Average in raw LSB, cast to int16_t
+    // Gyro offset = average (expecting zero motion)
+    cal->gx_offset = (int16_t)(sum_gx / MPU6050_CAL_SAMPLES);
+    cal->gy_offset = (int16_t)(sum_gy / MPU6050_CAL_SAMPLES);
+    cal->gz_offset = (int16_t)(sum_gz / MPU6050_CAL_SAMPLES);
+
+    // Accel: average minus 1g on Z (assuming level, Z-up)
+    cal->ax_offset = (int16_t)(sum_ax / MPU6050_CAL_SAMPLES);
+    cal->ay_offset = (int16_t)(sum_ay / MPU6050_CAL_SAMPLES);
+    cal->az_offset = (int16_t)((sum_az / MPU6050_CAL_SAMPLES) - MPU6050_ACCEL_LSB_PER_G);
+
+    cal->valid = true;
+
+    // Store in internal state
+    s_cal = *cal;
+    s_cal_valid = true;
+
+    // Save to NVS
+    esp_err_t ret = mpu6050_save_calibration();
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "Calibration computed but NVS save failed");
+    }
+
+    ESP_LOGI(TAG, "Calibration complete: gyro_off=(%d,%d,%d) accel_off=(%d,%d,%d)",
+             cal->gx_offset, cal->gy_offset, cal->gz_offset,
+             cal->ax_offset, cal->ay_offset, cal->az_offset);
+    return ESP_OK;
+}
+
+void mpu6050_get_calibration(mpu6050_calibration_t* cal)
+{
+    if (cal != NULL) {
+        *cal = s_cal;
+    }
+}
+
+void mpu6050_set_calibration(const mpu6050_calibration_t* cal)
+{
+    if (cal != NULL) {
+        s_cal = *cal;
+        s_cal_valid = true;
+    }
 }

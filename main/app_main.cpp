@@ -116,14 +116,14 @@ extern "C" void app_main(void)
     ESP_ERROR_CHECK(gpio_config(&io_conf));
 
     uint32_t loop_count = 0;
-    mpu6050_error_count_t mpu_errs = {0};
-    bmp280_error_count_t bmp_errs = {0};
-    estimator_state_t est_state = {0};
-    float pid_output[3] = {0};
-    motor_mixer_output_t motor_mixer_out = {0};
-    motor_output_state_t motor_output_state = {0};
+    mpu6050_error_count_t mpu_errs = {};
+    bmp280_error_count_t bmp_errs = {};
+    estimator_state_t est_state = {};
+    float pid_output[3] = {};
+    motor_mixer_output_t motor_mixer_out = {};
+    motor_output_state_t motor_output_state = {};
     float target_throttle = 0.0f;  // Disarmed
-    estimator_attitude_t target_attitude = {0};  // Level target
+    estimator_attitude_t target_attitude = {};  // Level target
 
     TickType_t last_wake = xTaskGetTickCount();
     const TickType_t loop_period = pdMS_TO_TICKS(10);  // 100 Hz control loop
@@ -137,13 +137,13 @@ extern "C" void app_main(void)
         }
 
         // Read MPU6050
-        mpu6050_raw_t raw = {0};
-        mpu6050_scaled_t scaled = {0};
+        mpu6050_raw_t raw = {};
+        mpu6050_scaled_t scaled = {};
         esp_err_t raw_ret = mpu6050_read_raw(&raw);
         esp_err_t scaled_ret = mpu6050_read_scaled(&scaled);
 
         // Read BMP280
-        bmp280_compensated_t bmp = {0};
+        bmp280_compensated_t bmp = {};
         esp_err_t bmp_read = ESP_ERR_INVALID_STATE;
         if (bmp_ok) {
             bmp_read = bmp280_read_compensated(&bmp);
