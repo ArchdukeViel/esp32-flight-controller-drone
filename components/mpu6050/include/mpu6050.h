@@ -16,6 +16,9 @@
  */
 
 /** I2C register addresses */
+#define MPU6050_REG_PWR_MGMT_1      0x6B
+#define MPU6050_REG_GYRO_CONFIG     0x1B
+#define MPU6050_REG_ACCEL_CONFIG    0x1C
 #define MPU6050_REG_WHO_AM_I        0x75
 #define MPU6050_REG_ACCEL_XOUT_H    0x3B  // Start of 14-byte burst
 
@@ -36,6 +39,17 @@
 /** Calibration sample count (collect N samples, average) */
 #define MPU6050_CAL_SAMPLES         1000
 #define MPU6050_CAL_DELAY_MS        2       // ~500 Hz sampling during calibration
+
+/**
+ * @brief Initialize MPU6050: wake from sleep, configure accel/gyro ranges.
+ *
+ * Writes PWR_MGMT_1=0x00 (wake), GYRO_CONFIG=0x00 (±250dps), ACCEL_CONFIG=0x00 (±2g).
+ *
+ * @return ESP_OK on success.
+ * @return ESP_ERR_INVALID_STATE if I2C bus not initialized.
+ * @return other esp_err_t on bus/communication errors.
+ */
+esp_err_t mpu6050_init(void);
 
 /**
  * @brief Detect MPU6050 by reading WHO_AM_I register (0x75).

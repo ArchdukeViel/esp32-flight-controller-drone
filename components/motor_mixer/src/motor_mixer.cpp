@@ -18,6 +18,12 @@ esp_err_t motor_mixer_mix(const float pid_output[3], float throttle, motor_mixer
 {
     if (!pid_output || !output) return ESP_ERR_INVALID_ARG;
 
+    // Reject NaN/Inf inputs
+    if (!isfinite(throttle) || !isfinite(pid_output[0]) || !isfinite(pid_output[1]) || !isfinite(pid_output[2])) {
+        ESP_LOGE(TAG, "Invalid input: NaN/Inf detected");
+        return ESP_ERR_INVALID_ARG;
+    }
+
     // Clamp throttle
     if (throttle < 0.0f) throttle = 0.0f;
     if (throttle > 1.0f) throttle = 1.0f;

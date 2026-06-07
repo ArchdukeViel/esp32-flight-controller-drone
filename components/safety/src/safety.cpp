@@ -120,6 +120,15 @@ static bool check_sensor_health(void)
         return false;
     }
 
+    // Check for stuck-at-zero sensor data (MPU6050 asleep or not configured)
+    mpu6050_raw_t raw = {};
+    if (mpu6050_read_raw(&raw) == ESP_OK) {
+        if (raw.ax == 0 && raw.ay == 0 && raw.az == 0 && raw.gx == 0 && raw.gy == 0 && raw.gz == 0) {
+            s_last_failure_reason = "MPU6050 data all zero (sensor not awake?)";
+            return false;
+        }
+    }
+
     // Note: Runtime IMU read failures are caught via estimator staleness check
     // (estimator_update skipped on read failure -> timestamp stale -> failsafe)
 

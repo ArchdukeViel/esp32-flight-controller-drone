@@ -28,6 +28,71 @@ static inline void increment_init_error(void) {
     s_error_counts.last_error_tick = xTaskGetTickCount();
 }
 
+esp_err_t mpu6050_init(void)
+{
+    i2c_master_bus_handle_t bus = i2c_bus_get_handle();
+    if (bus == NULL) {
+        ESP_LOGE(TAG, "I2C bus not initialized");
+        increment_init_error();
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    // Add device at MPU6050 I2C address
+    i2c_device_config_t dev_cfg = {
+        .dev_addr_length = I2C_ADDR_BIT_LEN_7,
+        .device_address = MPU6050_I2C_ADDR,
+        .scl_speed_hz = I2C_MASTER_FREQ_HZ,
+        .scl_wait_us = 0,
+        .flags = {
+            .disable_ack_check = false,
+        },
+    };
+
+    i2c_master_dev_handle_t dev_handle = NULL;
+    esp_err_t ret = i2c_master_bus_add_device(bus, &dev_cfg, &dev_handle);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to add I2C device at 0x%02X: %s",
+                 MPU6050_I2C_ADDR, esp_err_to_name(ret));
+        increment_init_error();
+        return ret;
+    }
+
+    // Wake from sleep: write 0x00 to PWR_MGMT_1 (register 0x6B)
+    uint8_t wake_cmd[2] = { MPU6050_REG_PWR_MGMT_1, 0x00 };
+    ret = i2c_master_transmit(dev_handle, wake_cmd, 2, pdMS_TO_TICKS(50));
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to wake MPU6050: %s", esp_err_to_name(ret));
+        i2c_master_bus_rm_device(dev_handle);
+        increment_init_error();
+        return ret;
+    }
+    vTaskDelay(pdMS_TO_TICKS(100)); // Wait for wake-up
+
+    // Configure gyro range: ±250 dps (0x00 to GYRO_CONFIG register 0x1B)
+    uint8_t gyro_cfg[2] = { MPU6050_REG_GYRO_CONFIG, 0x00 };
+    ret = i2c_master_transmit(dev_handle, gyro_cfg, 2, pdMS_TO_TICKS(50));
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to configure gyro: %s", esp_err_to_name(ret));
+        i2c_master_bus_rm_device(dev_handle);
+        increment_init_error();
+        return ret;
+    }
+
+    // Configure accel range: ±2g (0x00 to ACCEL_CONFIG register 0x1C)
+    uint8_t accel_cfg[2] = { MPU6050_REG_ACCEL_CONFIG, 0x00 };
+    ret = i2c_master_transmit(dev_handle, accel_cfg, 2, pdMS_TO_TICKS(50));
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to configure accel: %s", esp_err_to_name(ret));
+        i2c_master_bus_rm_device(dev_handle);
+        increment_init_error();
+        return ret;
+    }
+
+    i2c_master_bus_rm_device(dev_handle);
+    ESP_LOGI(TAG, "MPU6050 initialized: wake + ±2g/±250dps");
+    return ESP_OK;
+}
+
 esp_err_t mpu6050_detect(void)
 {
     i2c_master_bus_handle_t bus = i2c_bus_get_handle();

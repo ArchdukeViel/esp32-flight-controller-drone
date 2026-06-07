@@ -58,6 +58,13 @@ extern "C" void app_main(void)
     }
     ESP_LOGI(TAG, "MPU6050 confirmed at 0x%02X", MPU6050_I2C_ADDR);
 
+    // Initialize MPU6050: wake from sleep, configure ranges
+    mpu_ret = mpu6050_init();
+    if (mpu_ret != ESP_OK) {
+        ESP_LOGE(TAG, "MPU6050 init failed, halting");
+        while (1) vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+
     // Load MPU6050 calibration from NVS
     mpu6050_load_calibration();
     mpu6050_calibration_t mpu_cal;
@@ -170,7 +177,12 @@ extern "C" void app_main(void)
             pid_compute(&target_attitude, &est_state.attitude, 0.01f, pid_output);
 
             // Mix PID outputs with throttle
-            motor_mixer_mix(pid_output, target_throttle, &motor_mixer_out);
+            esp_err_t mix_ret = motor_mixer_mix(pid_output, target_throttle, &motor_mixer_out);
+            if (mix_ret != ESP_OK) {
+                ESP_LOGE(TAG, "Motor mixer failed: %s (invalid control data)", esp_err_to_name(mix_ret));
+                // Force safe idle output on mixer failure
+                motor_mixer_disarm(&motor_mixer_out);
+            }
 
             // Send to motor output (MCPWM) - only if safety allows
             if (safety_is_motor_output_allowed()) {
