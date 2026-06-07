@@ -9,6 +9,8 @@
 #include "mpu6050.h"
 #include "bmp280.h"
 #include "estimator.h"
+#include "pid.h"
+#include "motor_mixer.h"
 
 static const char* TAG = "main";
 
@@ -22,12 +24,13 @@ extern "C" void app_main(void)
     ESP_LOGI(TAG, "Sensors: MPU6050, BMP280");
     ESP_LOGI(TAG, "ESCs: 30A, Motors: 2212 2200KV");
     ESP_LOGI(TAG, "Framework: ESP-IDF v6.0.1, C++17");
-    ESP_LOGI(TAG, "Phase: Prompt 8 - Estimator (attitude + altitude)");
+    ESP_LOGI(TAG, "Phase: Prompt 9 - PID + Motor Mixer");
     ESP_LOGI(TAG, "========================================");
 
     // Safety message
     ESP_LOGW(TAG, "SAFETY: No motor output exists in this phase.");
-    ESP_LOGW(TAG, "MCPWM, ESC pins, WiFi, PID, receiver, safety state machine are DISABLED.");
+    ESP_LOGW(TAG, "MCPWM, ESC pins, WiFi, receiver, safety state machine are DISABLED.");
+    ESP_LOGW(TAG, "PID + Motor Mixer implemented but NOT outputting to ESCs.");
     ESP_LOGW(TAG, "Do not connect ESCs or propellers.");
 
     // Initialize NVS
@@ -91,6 +94,12 @@ extern "C" void app_main(void)
     // Initialize estimator
     ESP_ERROR_CHECK(estimator_init());
 
+    // Initialize PID
+    ESP_ERROR_CHECK(pid_init());
+
+    // Initialize motor mixer
+    ESP_ERROR_CHECK(motor_mixer_init());
+
     // Optional LED blink if board_config defines a safe onboard LED pin
 #ifdef BOARD_HAS_SAFE_ONBOARD_LED
     ESP_LOGI(TAG, "Blinking onboard LED on GPIO %d", BOARD_ONBOARD_LED_GPIO_NUM);
@@ -106,8 +115,13 @@ extern "C" void app_main(void)
     mpu6050_error_count_t mpu_errs = {0};
     bmp280_error_count_t bmp_errs = {0};
     estimator_state_t est_state = {0};
+    float pid_output[3] = {0};
+    motor_mixer_output_t motor_output = {0};
+    float target_throttle = 0.0f;  // Disarmed
+    estimator_attitude_t target_attitude = {0};  // Level target
+
     TickType_t last_wake = xTaskGetTickCount();
-    const TickType_t loop_period = pdMS_TO_TICKS(10);  // 100 Hz estimator update
+    const TickType_t loop_period = pdMS_TO_TICKS(10);  // 100 Hz control loop
 
     while (1) {
         // Toggle LED for liveness (every 10 loops = 10 Hz blink)
@@ -135,6 +149,17 @@ extern "C" void app_main(void)
             estimator_update(&scaled, bmp_ok ? &bmp : NULL, 0.01f);
         }
 
+        // Get current estimated attitude
+        estimator_get_state(&est_state);
+
+        // Compute PID (target = level, current = estimated)
+        if (est_state.initialized && scaled_ret == ESP_OK) {
+            pid_compute(&target_attitude, &est_state.attitude, 0.01f, pid_output);
+
+            // Mix PID outputs with throttle (disarmed = idle)
+            motor_mixer_mix(pid_output, target_throttle, &motor_output);
+        }
+
         // Log at 10 Hz (every 10 loops)
         if (loop_count % 10 == 0) {
             if (raw_ret == ESP_OK && scaled_ret == ESP_OK) {
@@ -158,7 +183,6 @@ extern "C" void app_main(void)
             }
 
             // Log estimator state
-            estimator_get_state(&est_state);
             if (est_state.initialized) {
                 ESP_LOGI(TAG, "EST: roll=%7.3f pitch=%7.3f yaw=%7.3f deg  alt=%7.2f m  vel=%6.2f m/s  baro=%7.2f m",
                          est_state.attitude.roll * 180.0f / 3.14159f,
@@ -167,6 +191,18 @@ extern "C" void app_main(void)
                          est_state.altitude.altitude,
                          est_state.altitude.vertical_vel,
                          est_state.altitude.baro_alt);
+            }
+
+            // Log PID + motor mixer
+            if (est_state.initialized) {
+                uint16_t pwm[4];
+                for (int i = 0; i < 4; i++) pwm[i] = motor_mixer_to_pwm_us(motor_output.motor[i]);
+                ESP_LOGI(TAG, "PID:  roll=%7.3f pitch=%7.3f yaw=%7.3f  (rad/s norm)",
+                         pid_output[0], pid_output[1], pid_output[2]);
+                ESP_LOGI(TAG, "MIX:  FR=%5.3f FL=%5.3f RR=%5.3f RL=%5.3f  PWM: %u %u %u %u us",
+                         motor_output.motor[0], motor_output.motor[1],
+                         motor_output.motor[2], motor_output.motor[3],
+                         pwm[0], pwm[1], pwm[2], pwm[3]);
             }
         }
 

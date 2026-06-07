@@ -1,4 +1,4 @@
-Prompt 8 — Estimator: complementary filter (attitude) + altitude fusion (baro + accel Z)
+Prompt 9 — PID controller (roll/pitch/yaw) + Motor Mixer (Quad X)
 ======================================
 
 Status: Build gate PENDING. Hardware gate PENDING.
@@ -32,8 +32,13 @@ Hardware result (2026-06-07):
 - Attitude: accel roll/pitch fused with gyro integration at 100 Hz.
 - Altitude: barometric altitude fused with double-integrated world-frame Z accel.
 - Estimator runs at 100 Hz, logs at 10 Hz, error counts at 1 Hz.
+- PID component created: 3-axis PID with anti-windup (integral clamping), output saturation, derivative on measurement.
+- Default gains: roll/pitch KP=4.0, KI=0.15, KD=0.03; yaw KP=6.0, KI=0.2, KD=0.0.
+- Motor mixer component created: Quad X mixing matrix, throttle scaling + normalization, PWM us conversion (1000-2000).
+- Control loop at 100 Hz: sensors -> estimator -> PID -> mixer -> motor commands (logged only, not output to ESCs).
+- PID outputs and motor PWM values logged at 10 Hz.
 
-This is a PASS for Prompt 8. Estimator implemented and integrated.
+This is a PASS for Prompt 9. PID + Motor Mixer implemented and integrated in control loop.
 
 What exists:
 - board_config component with hardware constants
@@ -41,19 +46,21 @@ What exists:
 - mpu6050 component with WHO_AM_I detection + raw/scaled burst read + calibration + NVS
 - bmp280 component with chip ID detection + calibration + compensated read + altitude
 - estimator component with complementary filter (attitude) + altitude fusion
-- app_main initializes NVS, I2C, scans bus, checks MPU6050 WHO_AM_I, loads/runs calibration, detects/init BMP280, initializes estimator, then enters 100 Hz sensor read + estimator update loop with LED blink
+- pid component with 3-axis PID, anti-windup, output saturation, derivative on measurement
+- motor_mixer component with Quad X mixing, throttle normalization, PWM conversion
+- app_main initializes all components, runs 100 Hz control loop: sensors -> estimator -> PID -> mixer, logs all data
 
 What does NOT exist:
-- PID controller
-- MCPWM / motor output
+- MCPWM / motor output (ESC signal generation)
 - WiFi / Android app
-- Receiver input
-- Safety state machine
+- Receiver input (RC PWM capture)
+- Safety state machine (arming, failsafe, pre-arm checks)
 
 Next gate:
-Prompt 9 — PID controller (roll/pitch/yaw) with anti-windup, gain bounds, motor mixer (Quad X).
-Only after Prompt 8 hardware result recorded.
+Prompt 10 — MCPWM driver for ESC output (4 channels, 1000-2000 us, DShot/Oneshot/PWM).
+Only after Prompt 9 hardware result recorded.
 
 Remaining warnings:
-- MCPWM, ESC, WiFi, PID, receiver, safety state machine all DISABLED.
+- MCPWM, ESC, WiFi, receiver, safety state machine all DISABLED.
 - Do not connect ESCs, motors, or propellers.
+- PID outputs and motor commands are logged but NOT sent to any output pins.
