@@ -1,12 +1,24 @@
-Prompt 10 — MCPWM Motor Output (4 channels, 1000-2000 µs PWM)
+Prompt 11 — Safety State Machine
 ======================================
 
 Status: Build gate PASSED. Hardware gate PENDING.
 
 Hardware result (2026-06-07):
+- Build verification PASSED (commit da7cd00)
+- Safety State Machine component created and integrated
+- States: BOOT, DISARMED, PRE_ARM_CHECK, ARMED, FAILSAFE, ERROR
+- Motor output gated by safety_is_motor_output_allowed()
+- PID reset on safety transitions
+- Emergency stop implemented
+- Pre-arm checks: motor output ready, estimator initialized/fresh, sensors healthy
+- ARMED monitors sensor/estimator health → FAILSAFE on loss
+- No automatic arming path
+- Hardware motor gate: NOT TESTED (ESCs not connected)
+
+Previous phases (build + hardware verified):
 - ESP32 DevKit V1 powered via USB
 - I2C: MPU6050 at 0x68, BMP280 at 0x76 detected
-- MPU6050: WHO_AM_I=0x68 confirmed, raw+ scaled reads working
+- MPU6050: WHO_AM_I=0x68 confirmed, raw+scaled reads working
 - MPU6050: Calibration load/save via NVS working
 - BMP280: Chip ID 0x58 confirmed, compensated T/P/alt working
 - Estimator: Complementary filter (attitude) + altitude fusion working
@@ -14,4 +26,4 @@ Hardware result (2026-06-07):
 - Motor Mixer: Quad X mixing matrix working
 - Motor Output: MCPWM 4-channel driver created, build gate PASSED
 
-Next: Prompt 11 - Safety State Machine (arming, failsafe, pre-arm checks)
+Next: Post-implementation safety audit, then hardware-safe verification with ESCs (no propellers)

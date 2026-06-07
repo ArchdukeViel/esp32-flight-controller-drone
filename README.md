@@ -11,7 +11,7 @@ Experimental ESP32 DevKit V1 flight controller firmware using ESP-IDF C++17.
 - **Motors**: 2212 2200KV brushless x4
 - **Future**: Android WiFi telemetry/config/control app
 
-## Current Phase: Prompt 10 - MCPWM Motor Output
+## Current Phase: Prompt 11 - Safety State Machine
 
 **Build gate: PASSED** | **Hardware gate: PENDING**
 
