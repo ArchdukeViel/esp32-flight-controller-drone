@@ -8,6 +8,7 @@
 #include "i2c_bus.h"
 #include "mpu6050.h"
 #include "bmp280.h"
+#include "estimator.h"
 
 static const char* TAG = "main";
 
@@ -21,7 +22,7 @@ extern "C" void app_main(void)
     ESP_LOGI(TAG, "Sensors: MPU6050, BMP280");
     ESP_LOGI(TAG, "ESCs: 30A, Motors: 2212 2200KV");
     ESP_LOGI(TAG, "Framework: ESP-IDF v6.0.1, C++17");
-    ESP_LOGI(TAG, "Phase: Prompt 7 - BMP280 integration");
+    ESP_LOGI(TAG, "Phase: Prompt 8 - Estimator (attitude + altitude)");
     ESP_LOGI(TAG, "========================================");
 
     // Safety message
@@ -75,15 +76,20 @@ extern "C" void app_main(void)
     // Detect and initialize BMP280
     uint8_t bmp_addr = 0;
     esp_err_t bmp_ret = bmp280_detect(&bmp_addr);
+    bool bmp_ok = false;
     if (bmp_ret == ESP_OK) {
         ESP_LOGI(TAG, "BMP280 confirmed at 0x%02X", bmp_addr);
         ESP_ERROR_CHECK(bmp280_init());
         bmp280_calib_t bmp_cal;
         bmp280_get_calibration(&bmp_cal);
         ESP_LOGI(TAG, "BMP280 calibration loaded: dig_T1=%u dig_P1=%u", bmp_cal.dig_T1, bmp_cal.dig_P1);
+        bmp_ok = true;
     } else {
         ESP_LOGW(TAG, "BMP280 not detected at 0x76 or 0x77");
     }
+
+    // Initialize estimator
+    ESP_ERROR_CHECK(estimator_init());
 
     // Optional LED blink if board_config defines a safe onboard LED pin
 #ifdef BOARD_HAS_SAFE_ONBOARD_LED
@@ -96,15 +102,20 @@ extern "C" void app_main(void)
     io_conf.pull_up_en = GPIO_PULLUP_DISABLE;
     ESP_ERROR_CHECK(gpio_config(&io_conf));
 
-    uint32_t read_count = 0;
+    uint32_t loop_count = 0;
     mpu6050_error_count_t mpu_errs = {0};
     bmp280_error_count_t bmp_errs = {0};
+    estimator_state_t est_state = {0};
+    TickType_t last_wake = xTaskGetTickCount();
+    const TickType_t loop_period = pdMS_TO_TICKS(10);  // 100 Hz estimator update
 
     while (1) {
-        // Toggle LED for liveness
-        ESP_ERROR_CHECK(gpio_set_level((gpio_num_t)BOARD_ONBOARD_LED_GPIO_NUM, 1));
-        vTaskDelay(pdMS_TO_TICKS(100));
-        ESP_ERROR_CHECK(gpio_set_level((gpio_num_t)BOARD_ONBOARD_LED_GPIO_NUM, 0));
+        // Toggle LED for liveness (every 10 loops = 10 Hz blink)
+        if (loop_count % 10 == 0) {
+            ESP_ERROR_CHECK(gpio_set_level((gpio_num_t)BOARD_ONBOARD_LED_GPIO_NUM, 1));
+        } else if (loop_count % 10 == 1) {
+            ESP_ERROR_CHECK(gpio_set_level((gpio_num_t)BOARD_ONBOARD_LED_GPIO_NUM, 0));
+        }
 
         // Read MPU6050
         mpu6050_raw_t raw = {0};
@@ -112,32 +123,55 @@ extern "C" void app_main(void)
         esp_err_t raw_ret = mpu6050_read_raw(&raw);
         esp_err_t scaled_ret = mpu6050_read_scaled(&scaled);
 
-        if (raw_ret == ESP_OK && scaled_ret == ESP_OK) {
-            read_count++;
-            if (read_count % 10 == 0) {
+        // Read BMP280
+        bmp280_compensated_t bmp = {0};
+        esp_err_t bmp_read = ESP_ERR_INVALID_STATE;
+        if (bmp_ok) {
+            bmp_read = bmp280_read_compensated(&bmp);
+        }
+
+        // Update estimator at 100 Hz (dt = 0.01s)
+        if (scaled_ret == ESP_OK) {
+            estimator_update(&scaled, bmp_ok ? &bmp : NULL, 0.01f);
+        }
+
+        // Log at 10 Hz (every 10 loops)
+        if (loop_count % 10 == 0) {
+            if (raw_ret == ESP_OK && scaled_ret == ESP_OK) {
                 ESP_LOGI(TAG, "MPU RAW  (#%lu): ax=%6d ay=%6d az=%6d  t=%6d  gx=%6d gy=%6d gz=%6d",
-                         read_count, raw.ax, raw.ay, raw.az, raw.t, raw.gx, raw.gy, raw.gz);
+                         loop_count, raw.ax, raw.ay, raw.az, raw.t, raw.gx, raw.gy, raw.gz);
                 ESP_LOGI(TAG, "MPU SCALED: ax=%7.3f ay=%7.3f az=%7.3f m/s^2  t=%5.2f C  gx=%7.3f gy=%7.3f gz=%7.3f rad/s",
                          scaled.ax, scaled.ay, scaled.az, scaled.t,
                          scaled.gx, scaled.gy, scaled.gz);
+            } else {
+                ESP_LOGW(TAG, "MPU6050 read failed: raw=%s scaled=%s",
+                         esp_err_to_name(raw_ret), esp_err_to_name(scaled_ret));
             }
-        } else {
-            ESP_LOGW(TAG, "MPU6050 read failed: raw=%s scaled=%s",
-                     esp_err_to_name(raw_ret), esp_err_to_name(scaled_ret));
+
+            if (bmp_ok) {
+                if (bmp_read == ESP_OK) {
+                    ESP_LOGI(TAG, "BMP280: T=%6.2f C  P=%10.0f Pa  Alt=%7.2f m",
+                             bmp.temperature, bmp.pressure, bmp.altitude);
+                } else {
+                    ESP_LOGW(TAG, "BMP280 read failed: %s", esp_err_to_name(bmp_read));
+                }
+            }
+
+            // Log estimator state
+            estimator_get_state(&est_state);
+            if (est_state.initialized) {
+                ESP_LOGI(TAG, "EST: roll=%7.3f pitch=%7.3f yaw=%7.3f deg  alt=%7.2f m  vel=%6.2f m/s  baro=%7.2f m",
+                         est_state.attitude.roll * 180.0f / 3.14159f,
+                         est_state.attitude.pitch * 180.0f / 3.14159f,
+                         est_state.attitude.yaw * 180.0f / 3.14159f,
+                         est_state.altitude.altitude,
+                         est_state.altitude.vertical_vel,
+                         est_state.altitude.baro_alt);
+            }
         }
 
-        // Read BMP280
-        bmp280_compensated_t bmp = {0};
-        esp_err_t bmp_read = bmp280_read_compensated(&bmp);
-        if (bmp_read == ESP_OK && read_count % 10 == 0) {
-            ESP_LOGI(TAG, "BMP280: T=%6.2f C  P=%10.0f Pa  Alt=%7.2f m",
-                     bmp.temperature, bmp.pressure, bmp.altitude);
-        } else if (bmp_read != ESP_OK && read_count % 10 == 0) {
-            ESP_LOGW(TAG, "BMP280 read failed: %s", esp_err_to_name(bmp_read));
-        }
-
-        // Log error counts periodically
-        if (read_count % 50 == 0) {
+        // Log error counts periodically (every 100 loops = 1 Hz)
+        if (loop_count % 100 == 0 && loop_count > 0) {
             mpu6050_get_error_counts(&mpu_errs);
             bmp280_get_error_counts(&bmp_errs);
             if (mpu_errs.read_errors > 0 || mpu_errs.init_errors > 0 ||
@@ -148,7 +182,8 @@ extern "C" void app_main(void)
             }
         }
 
-        vTaskDelay(pdMS_TO_TICKS(900));
+        loop_count++;
+        vTaskDelayUntil(&last_wake, loop_period);
     }
 #else
     ESP_LOGI(TAG, "No safe onboard LED defined. Idle loop.");
