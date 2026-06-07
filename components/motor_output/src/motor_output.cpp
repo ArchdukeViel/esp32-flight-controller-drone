@@ -23,7 +23,7 @@ static bool s_armed = false;
 
 // MCPWM handles
 static mcpwm_timer_handle_t s_timer = NULL;
-static mcpwm_oper_handle_t s_operators[4] = {NULL};
+static mcpwm_oper_handle_t s_operators[2] = {NULL};  // 2 operators: motors 0-1 on op0, motors 2-3 on op1
 static mcpwm_cmpr_handle_t s_comparators[4] = {NULL};
 static mcpwm_gen_handle_t s_generators[4] = {NULL};
 
@@ -80,7 +80,10 @@ static esp_err_t setup_mcpwm_operators(void)
             .update_dead_time_on_sync = false,
         },
     };
-    for (int i = 0; i < 4; i++) {
+    // Create only 2 operators (ESP32 limit: 3 per group)
+    // Operator 0: motors 0-1
+    // Operator 1: motors 2-3
+    for (int i = 0; i < 2; i++) {
         esp_err_t ret = mcpwm_new_operator(&oper_config, &s_operators[i]);
         if (ret != ESP_OK) return ret;
         ret = mcpwm_operator_connect_timer(s_operators[i], s_timer);
@@ -99,8 +102,11 @@ static esp_err_t setup_mcpwm_comparators(void)
             .update_cmp_on_sync = false,
         },
     };
+    // Create 4 comparators: 2 per operator
+    // Motors 0-1 use operator 0, motors 2-3 use operator 1
     for (int i = 0; i < 4; i++) {
-        esp_err_t ret = mcpwm_new_comparator(s_operators[i], &cmp_config, &s_comparators[i]);
+        int oper_idx = i / 2;  // 0->0, 1->0, 2->1, 3->1
+        esp_err_t ret = mcpwm_new_comparator(s_operators[oper_idx], &cmp_config, &s_comparators[i]);
         if (ret != ESP_OK) return ret;
     }
     return ESP_OK;
@@ -115,8 +121,9 @@ static esp_err_t setup_mcpwm_generators(void)
         },
     };
     for (int i = 0; i < 4; i++) {
+        int oper_idx = i / 2;  // Motors 0-1 use operator 0, motors 2-3 use operator 1
         gen_config.gen_gpio_num = s_motor_gpios[i];
-        esp_err_t ret = mcpwm_new_generator(s_operators[i], &gen_config, &s_generators[i]);
+        esp_err_t ret = mcpwm_new_generator(s_operators[oper_idx], &gen_config, &s_generators[i]);
         if (ret != ESP_OK) return ret;
 
         // Set actions: high on timer empty (TEZ), low on compare match (TCMP)
@@ -212,6 +219,8 @@ void motor_output_deinit(void)
     for (int i = 0; i < 4; i++) {
         if (s_generators[i]) { mcpwm_del_generator(s_generators[i]); s_generators[i] = NULL; }
         if (s_comparators[i]) { mcpwm_del_comparator(s_comparators[i]); s_comparators[i] = NULL; }
+    }
+    for (int i = 0; i < 2; i++) {
         if (s_operators[i]) { mcpwm_del_operator(s_operators[i]); s_operators[i] = NULL; }
     }
     s_initialized = false;
