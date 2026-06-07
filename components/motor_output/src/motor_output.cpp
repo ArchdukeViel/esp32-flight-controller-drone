@@ -269,6 +269,11 @@ esp_err_t motor_output_disarm(void)
     return ESP_OK;
 }
 
+bool motor_output_is_initialized(void)
+{
+    return s_initialized;
+}
+
 bool motor_output_is_armed(void)
 {
     return s_armed;

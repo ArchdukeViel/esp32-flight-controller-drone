@@ -59,6 +59,12 @@ esp_err_t motor_output_arm(void);
 esp_err_t motor_output_disarm(void);
 
 /**
+ * @brief Check if motor output is initialized.
+ * @return true if initialized
+ */
+bool motor_output_is_initialized(void);
+
+/**
  * @brief Check if motor output is armed.
  * @return true if armed
  */

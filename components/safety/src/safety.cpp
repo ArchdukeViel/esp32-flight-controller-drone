@@ -19,12 +19,10 @@ static bool s_disarm_requested = false;
 
 // Health tracking
 static uint32_t s_last_estimator_update_ms = 0;
-static uint32_t s_last_sensor_good_ms = 0;
 
 // Timeouts and limits
 #define PRE_ARM_CHECK_TIMEOUT_MS  5000
 #define ESTIMATOR_STALE_TIMEOUT_MS 200
-#define SENSOR_STALE_TIMEOUT_MS    200
 
 static const char* state_to_string(safety_state_t state)
 {
@@ -116,25 +114,23 @@ static bool check_sensor_health(void)
     mpu6050_error_count_t mpu_errs = {};
     mpu6050_get_error_counts(&mpu_errs);
 
-    // Accept if no persistent errors
+    // Check init errors (persistent failure)
     if (mpu_errs.init_errors > 0) {
         s_last_failure_reason = "MPU6050 init errors";
         return false;
     }
 
-    uint32_t now_ms = xTaskGetTickCount() * portTICK_PERIOD_MS;
-    s_last_sensor_good_ms = now_ms;
+    // Note: Runtime IMU read failures are caught via estimator staleness check
+    // (estimator_update skipped on read failure -> timestamp stale -> failsafe)
+
     return true;
 }
 
 static bool check_motor_output_ready(void)
 {
-    if (!motor_output_is_armed()) {
-        // Check if motor output is initialized by trying to get state
-        motor_output_state_t state = {};
-        motor_output_get_state(&state);
-        // If we get valid pulse values, it's initialized
-        return true;
+    if (!motor_output_is_initialized()) {
+        s_last_failure_reason = "Motor output not initialized";
+        return false;
     }
     return true;
 }
@@ -162,6 +158,11 @@ static bool run_pre_arm_checks(void)
         s_last_failure_reason = "Already armed";
         return false;
     }
+
+    // Check 5: Throttle at idle (currently no external throttle source exists)
+    // Note: When a throttle command source is added (receiver/WiFi/etc),
+    // this check must validate that throttle command is at idle before arming.
+    // Current system has target_throttle hardcoded to 0.0f in app_main.
 
     return true;
 }
@@ -291,7 +292,6 @@ esp_err_t safety_init(void)
     s_arm_requested = false;
     s_disarm_requested = false;
     s_last_estimator_update_ms = 0;
-    s_last_sensor_good_ms = 0;
 
     // Force safe outputs immediately
     motor_output_disarm();
