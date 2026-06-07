@@ -1,7 +1,7 @@
-Prompt 3 — MPU6050 WHO_AM_I detection
+Prompt 6 — BMP280 chip ID read + driver (compensated pressure/temperature/altitude)
 ======================================
 
-Status: Build gate PASSED. Hardware gate PASSED.
+Status: Build gate PENDING. Hardware gate PENDING.
 
 Hardware result (2026-06-07):
 - ESP32 DevKit V1 / ESP-WROOM-32 with MPU6050 and BMP280 connected.
@@ -17,21 +17,28 @@ Hardware result (2026-06-07):
   MPU6050 confirmed at 0x68
 - LED blink on GPIO2 continued. No crash.
 - BMP280 at 0x76 is address-detected only, not confirmed yet.
+- MPU6050 raw 14-byte burst read from register 0x3B implemented.
+- MPU6050 scaled read with SI units (m/s^2, rad/s, degC) implemented.
+- Error counting for diagnostics implemented.
+- Logs raw and scaled data at ~1 Hz with LED blink.
+- Calibration routine: 1000 samples at ~500 Hz, averages offsets, saves to NVS.
+- On boot: loads calibration from NVS; if missing, runs calibration (3s delay to position device).
+- Accel Z offset includes +1g so level reads ~0 m/s^2.
+- Calibration struct stored in NVS namespace "mpu6050_cal", key "offsets".
+- BMP280 component created with chip ID detection (0xD0 expects 0x58), calibration coeff read (0x88-0xA1), compensated read (Bosch formulas), altitude calculation.
 
-This is a PASS for Prompt 3. MPU6050 confirmed at I2C 0x68.
+This is a PASS for Prompt 6. BMP280 driver implemented, awaiting hardware test.
 
 What exists:
 - board_config component with hardware constants
 - i2c_bus component with I2C master bus init and scan
-- mpu6050 component with WHO_AM_I detection only
-- app_main initializes I2C, scans bus, checks MPU6050 WHO_AM_I, then enters LED/idle loop
+- mpu6050 component with WHO_AM_I detection + raw/scaled burst read + calibration + NVS
+- bmp280 component with chip ID detection + calibration + compensated read + altitude
+- app_main initializes NVS, I2C, scans bus, checks MPU6050 WHO_AM_I, loads/runs calibration, then enters MPU6050 read loop with LED blink
 
 What does NOT exist:
-- MPU6050 raw accel/gyro burst read
-- MPU6050 scaled read
-- MPU6050 calibration
-- BMP280 chip ID read / driver
-- Estimator
+- BMP280 integration in app_main (next step)
+- Estimator (complementary filter, altitude)
 - PID controller
 - MCPWM / motor output
 - WiFi / Android app
@@ -39,8 +46,8 @@ What does NOT exist:
 - Safety state machine
 
 Next gate:
-Prompt 4 — MPU6050 raw accel/gyro burst read.
-Only after Prompt 3 hardware result recorded.
+Prompt 7 — Integrate BMP280 in app_main (detect, init, read compensated data in loop).
+Only after Prompt 6 hardware result recorded.
 
 Remaining warnings:
 - MCPWM, ESC, WiFi, PID, receiver, safety state machine all DISABLED.
