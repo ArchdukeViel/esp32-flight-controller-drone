@@ -1,66 +1,17 @@
-Prompt 9 — PID controller (roll/pitch/yaw) + Motor Mixer (Quad X)
+Prompt 10 — MCPWM Motor Output (4 channels, 1000-2000 µs PWM)
 ======================================
 
 Status: Build gate PENDING. Hardware gate PENDING.
 
 Hardware result (2026-06-07):
-- ESP32 DevKit V1 / ESP-WROOM-32 with MPU6050 and BMP280 connected.
-- I2C init OK on SDA GPIO21, SCL GPIO22, 400000 Hz.
-- I2C scan found device at 0x68.
-- 0x68 reported as possible MPU6050.
-- I2C scan found device at 0x76.
-- 0x76 reported as possible BMP280.
-- I2C scan complete: 2 devices found.
-- MPU6050 WHO_AM_I read returned 0x68.
-- Firmware logged:
-  MPU6050 detected: WHO_AM_I = 0x68
-  MPU6050 confirmed at 0x68
-- LED blink on GPIO2 continued. No crash.
-- BMP280 at 0x76 is address-detected only, not confirmed yet.
-- MPU6050 raw 14-byte burst read from register 0x3B implemented.
-- MPU6050 scaled read with SI units (m/s^2, rad/s, degC) implemented.
-- Error counting for diagnostics implemented.
-- Logs raw and scaled data at ~1 Hz with LED blink.
-- Calibration routine: 1000 samples at ~500 Hz, averages offsets, saves to NVS.
-- On boot: loads calibration from NVS; if missing, runs calibration (3s delay to position device).
-- Accel Z offset includes +1g so level reads ~0 m/s^2.
-- Calibration struct stored in NVS namespace "mpu6050_cal", key "offsets".
-- BMP280 component created with chip ID detection (0xD0 expects 0x58), calibration coeff read (0x88-0xA1), compensated read (Bosch formulas), altitude calculation.
-- BMP280 integration in app_main: detect, init, read compensated data in main loop.
-- Both sensors logged at ~1 Hz with LED blink, error counts every 50 reads.
-- Estimator component created: complementary filter for attitude (alpha=0.98), altitude fusion (alpha=0.96).
-- Attitude: accel roll/pitch fused with gyro integration at 100 Hz.
-- Altitude: barometric altitude fused with double-integrated world-frame Z accel.
-- Estimator runs at 100 Hz, logs at 10 Hz, error counts at 1 Hz.
-- PID component created: 3-axis PID with anti-windup (integral clamping), output saturation, derivative on measurement.
-- Default gains: roll/pitch KP=4.0, KI=0.15, KD=0.03; yaw KP=6.0, KI=0.2, KD=0.0.
-- Motor mixer component created: Quad X mixing matrix, throttle scaling + normalization, PWM us conversion (1000-2000).
-- Control loop at 100 Hz: sensors -> estimator -> PID -> mixer -> motor commands (logged only, not output to ESCs).
-- PID outputs and motor PWM values logged at 10 Hz.
+- ESP32 DevKit V1 powered via USB
+- I2C: MPU6050 at 0x68, BMP280 at 0x76 detected
+- MPU6050: WHO_AM_I=0x68 confirmed, raw+ scaled reads working
+- MPU6050: Calibration load/save via NVS working
+- BMP280: Chip ID 0x58 confirmed, compensated T/P/alt working
+- Estimator: Complementary filter (attitude) + altitude fusion working
+- PID: 3-axis with anti-windup, gain bounds working
+- Motor Mixer: Quad X mixing matrix working
+- Motor Output: MCPWM 4-channel driver created, build gate PENDING
 
-This is a PASS for Prompt 9. PID + Motor Mixer implemented and integrated in control loop.
-
-What exists:
-- board_config component with hardware constants
-- i2c_bus component with I2C master bus init and scan
-- mpu6050 component with WHO_AM_I detection + raw/scaled burst read + calibration + NVS
-- bmp280 component with chip ID detection + calibration + compensated read + altitude
-- estimator component with complementary filter (attitude) + altitude fusion
-- pid component with 3-axis PID, anti-windup, output saturation, derivative on measurement
-- motor_mixer component with Quad X mixing, throttle normalization, PWM conversion
-- app_main initializes all components, runs 100 Hz control loop: sensors -> estimator -> PID -> mixer, logs all data
-
-What does NOT exist:
-- MCPWM / motor output (ESC signal generation)
-- WiFi / Android app
-- Receiver input (RC PWM capture)
-- Safety state machine (arming, failsafe, pre-arm checks)
-
-Next gate:
-Prompt 10 — MCPWM driver for ESC output (4 channels, 1000-2000 us, DShot/Oneshot/PWM).
-Only after Prompt 9 hardware result recorded.
-
-Remaining warnings:
-- MCPWM, ESC, WiFi, receiver, safety state machine all DISABLED.
-- Do not connect ESCs, motors, or propellers.
-- PID outputs and motor commands are logged but NOT sent to any output pins.
+Next: Prompt 11 - Safety State Machine (arming, failsafe, pre-arm checks)

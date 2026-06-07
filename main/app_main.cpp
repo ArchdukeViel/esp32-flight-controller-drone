@@ -11,6 +11,7 @@
 #include "estimator.h"
 #include "pid.h"
 #include "motor_mixer.h"
+#include "motor_output.h"
 
 static const char* TAG = "main";
 
@@ -24,14 +25,14 @@ extern "C" void app_main(void)
     ESP_LOGI(TAG, "Sensors: MPU6050, BMP280");
     ESP_LOGI(TAG, "ESCs: 30A, Motors: 2212 2200KV");
     ESP_LOGI(TAG, "Framework: ESP-IDF v6.0.1, C++17");
-    ESP_LOGI(TAG, "Phase: Prompt 9 - PID + Motor Mixer");
+    ESP_LOGI(TAG, "Phase: Prompt 10 - MCPWM Motor Output");
     ESP_LOGI(TAG, "========================================");
 
     // Safety message
-    ESP_LOGW(TAG, "SAFETY: No motor output exists in this phase.");
-    ESP_LOGW(TAG, "MCPWM, ESC pins, WiFi, receiver, safety state machine are DISABLED.");
-    ESP_LOGW(TAG, "PID + Motor Mixer implemented but NOT outputting to ESCs.");
-    ESP_LOGW(TAG, "Do not connect ESCs or propellers.");
+    ESP_LOGW(TAG, "SAFETY: MCPWM motor output is NOW ENABLED.");
+    ESP_LOGW(TAG, "ESC pins (GPIO 18,19,23,25) will output PWM signals when ARMED.");
+    ESP_LOGW(TAG, "Do NOT connect ESCs or propellers unless intentionally testing.");
+    ESP_LOGW(TAG, "WiFi, receiver, safety state machine still DISABLED.");
 
     // Initialize NVS
     esp_err_t ret = nvs_flash_init();
@@ -100,6 +101,9 @@ extern "C" void app_main(void)
     // Initialize motor mixer
     ESP_ERROR_CHECK(motor_mixer_init());
 
+    // Initialize motor output (MCPWM)
+    ESP_ERROR_CHECK(motor_output_init(NULL));
+
     // Optional LED blink if board_config defines a safe onboard LED pin
 #ifdef BOARD_HAS_SAFE_ONBOARD_LED
     ESP_LOGI(TAG, "Blinking onboard LED on GPIO %d", BOARD_ONBOARD_LED_GPIO_NUM);
@@ -116,7 +120,8 @@ extern "C" void app_main(void)
     bmp280_error_count_t bmp_errs = {0};
     estimator_state_t est_state = {0};
     float pid_output[3] = {0};
-    motor_mixer_output_t motor_output = {0};
+    motor_mixer_output_t motor_mixer_out = {0};
+    motor_output_state_t motor_output_state = {0};
     float target_throttle = 0.0f;  // Disarmed
     estimator_attitude_t target_attitude = {0};  // Level target
 
@@ -156,8 +161,11 @@ extern "C" void app_main(void)
         if (est_state.initialized && scaled_ret == ESP_OK) {
             pid_compute(&target_attitude, &est_state.attitude, 0.01f, pid_output);
 
-            // Mix PID outputs with throttle (disarmed = idle)
-            motor_mixer_mix(pid_output, target_throttle, &motor_output);
+            // Mix PID outputs with throttle
+            motor_mixer_mix(pid_output, target_throttle, &motor_mixer_out);
+
+            // Send to motor output (MCPWM) - only if armed
+            motor_output_set(&motor_mixer_out);
         }
 
         // Log at 10 Hz (every 10 loops)
@@ -193,16 +201,21 @@ extern "C" void app_main(void)
                          est_state.altitude.baro_alt);
             }
 
-            // Log PID + motor mixer
+            // Log PID + motor mixer + motor output
             if (est_state.initialized) {
+                motor_output_get_state(&motor_output_state);
                 uint16_t pwm[4];
-                for (int i = 0; i < 4; i++) pwm[i] = motor_mixer_to_pwm_us(motor_output.motor[i]);
-                ESP_LOGI(TAG, "PID:  roll=%7.3f pitch=%7.3f yaw=%7.3f  (rad/s norm)",
+                for (int i = 0; i < 4; i++) pwm[i] = motor_mixer_to_pwm_us(motor_mixer_out.motor[i]);
+                ESP_LOGI(TAG, "PID:   roll=%7.3f pitch=%7.3f yaw=%7.3f  (norm)",
                          pid_output[0], pid_output[1], pid_output[2]);
-                ESP_LOGI(TAG, "MIX:  FR=%5.3f FL=%5.3f RR=%5.3f RL=%5.3f  PWM: %u %u %u %u us",
-                         motor_output.motor[0], motor_output.motor[1],
-                         motor_output.motor[2], motor_output.motor[3],
+                ESP_LOGI(TAG, "MIX:   FR=%5.3f FL=%5.3f RR=%5.3f RL=%5.3f  PWM: %u %u %u %u us",
+                         motor_mixer_out.motor[0], motor_mixer_out.motor[1],
+                         motor_mixer_out.motor[2], motor_mixer_out.motor[3],
                          pwm[0], pwm[1], pwm[2], pwm[3]);
+                ESP_LOGI(TAG, "MCPWM: ARMED=%s  pulse_us: %u %u %u %u",
+                         motor_output_state.armed ? "YES" : "NO",
+                         motor_output_state.pulse_us[0], motor_output_state.pulse_us[1],
+                         motor_output_state.pulse_us[2], motor_output_state.pulse_us[3]);
             }
         }
 
