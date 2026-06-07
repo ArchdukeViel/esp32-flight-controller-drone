@@ -11,42 +11,45 @@ Experimental ESP32 DevKit V1 flight controller firmware using ESP-IDF C++17.
 - **Motors**: 2212 2200KV brushless x4
 - **Future**: Android WiFi telemetry/config/control app
 
-## Current Phase: Prompt 3 - MPU6050 WHO_AM_I detection ✅ hardware passed
+## Current Phase: Prompt 10 - MCPWM Motor Output
 
-This phase adds MPU6050 detection and WHO_AM_I register read over I2C. MPU6050 confirmed at address 0x68.
+**Build gate: PASSED** | **Hardware gate: PENDING**
+
+See `docs/current_phase.txt` for detailed status and hardware test results.
 
 ### What exists:
 - Root CMakeLists.txt with C++17 configuration
-- main/app_main.cpp with boot banner, safety warnings, I2C init/scan, MPU6050 WHO_AM_I check, LED idle loop
-- components/board_config/ with hardware constants
+- main/app_main.cpp with boot banner, I2C init, sensor init, estimator/PID/mixer/motor-output pipeline, LED control loop
+- components/board_config/ with hardware constants and ESC pin definitions
 - components/i2c_bus/ with I2C master bus init and scan
-- components/mpu6050/ with WHO_AM_I detection only
+- components/mpu6050/ with detection, raw/scaled read, calibration, NVS storage
+- components/bmp280/ with detection, compensated temperature/pressure/altitude read
+- components/estimator/ with complementary filter (attitude) and altitude fusion
+- components/pid/ with 3-axis PID controller and anti-windup
+- components/motor_mixer/ with Quad X mixing matrix
+- components/motor_output/ with MCPWM 4-channel ESC driver (build-verified only)
 - sdkconfig.defaults with minimal ESP32 target
 - docs/current_phase.txt phase marker
 
-### What does NOT exist (forbidden in this phase):
-- ❌ MPU6050 raw accel/gyro burst read
-- ❌ MPU6050 scaled read
-- ❌ MPU6050 calibration
-- ❌ BMP280 chip ID read / driver
-- ❌ Estimator
-- ❌ PID controller
-- ❌ MCPWM / motor output
-- ❌ WiFi / Android app
+### What does NOT exist yet:
+- ❌ Safety state machine (arming/disarming/pre-arm checks/failsafe)
 - ❌ Receiver input
-- ❌ Safety state machine
+- ❌ WiFi telemetry/control
+- ❌ Android app
+- ❌ Motor-output hardware verification with ESCs connected
 
 ## Safety Warning
 
-⚠️ **THIS FIRMWARE HAS NO MOTOR OUTPUT CAPABILITY IN THIS PHASE**
+⚠️ **MOTOR OUTPUT DRIVER EXISTS BUT SAFETY STATE MACHINE IS NOT IMPLEMENTED**
 
-- No MCPWM initialization
-- No ESC signal generation
-- No motor test mode
-- No arming logic
-- No safety state machine
+Current firmware state:
+- MCPWM motor output driver is initialized and drives ESC pins (GPIO 18, 19, 23, 25)
+- Outputs default to 1000 µs idle pulse on boot
+- Motors remain DISARMED in current code (motor_output_arm() never called)
+- No safety state machine, no arming checks, no failsafe logic
+- Hardware motor gate: NOT PASSED (build-only verification)
 
-**Do not connect ESCs, motors, or propellers.** This phase only reads MPU6050 WHO_AM_I and blinks the onboard LED.
+**KEEP PROPELLERS REMOVED.** Do not connect ESCs or motors for testing until Prompt 11 Safety State Machine is implemented and hardware-verified. ESC signal capability exists but is not safety-gated.
 
 ## Build
 
@@ -61,71 +64,13 @@ cmd /c "C:\Akmal\Project-tools\.espressif\v6.0.1\esp-idf\export.bat && idf.py bu
 cmd /c "C:\Akmal\Project-tools\.espressif\v6.0.1\esp-idf\export.bat && idf.py -p COM3 flash monitor"
 ```
 
-## Expected Results
-
-### If no sensors connected:
-```
-I (xxx) main: ========================================
-I (xxx) main: ESP32 Flight Controller Drone
-I (xxx) main: Phase: Prompt 2 - I2C bus scan
-...
-I (xxx) i2c_bus: Initializing I2C master bus
-I (xxx) i2c_bus:   SDA GPIO: 21
-I (xxx) i2c_bus:   SCL GPIO: 22
-I (xxx) i2c_bus:   Frequency: 400000 Hz
-I (xxx) i2c_bus: I2C master bus initialized
-I (xxx) i2c_bus: Scanning I2C bus for devices...
-W (xxx) i2c_bus: I2C scan complete: 0 device(s) found. Sensors may not be connected.
-```
-
-### If MPU6050 connected:
-```
-I (xxx) i2c_bus: I2C device found at 0x68
-I (xxx) i2c_bus:   0x68 -> possible MPU6050 (not confirmed)
-```
-
-### If BMP280 connected:
-```
-I (xxx) i2c_bus: I2C device found at 0x76
-I (xxx) i2c_bus:   0x76 -> possible BMP280 (not confirmed)
-```
-
-## Prompt 2 Hardware Result
-
-**Hardware test**: ESP32 DevKit V1 / ESP-WROOM-32, **no sensors connected**.
-**Result**: I2C scan on SDA GPIO21, SCL GPIO22, 400000 Hz found **0 devices**.
-
-This is a **PASS** for the bus-scan firmware phase. Zero devices expected when no MPU6050 or BMP280 sensors connected to I2C bus. I2C bus init and scan logic execute correctly. LED blink on GPIO2 continues. No crash.
-
-⚠️ **Safety warning remains**: No ESCs, motors, or propellers connected during any Prompt 2 or Prompt 3 testing.
-
-## Prompt 3 Hardware Result
-
-**Hardware test**: ESP32 DevKit V1 / ESP-WROOM-32 with **MPU6050 and BMP280 connected**.
-**Result**: MPU6050 confirmed at I2C address `0x68`. WHO_AM_I register returned `0x68`.
-
-- I2C initialized on SDA GPIO21, SCL GPIO22, 400000 Hz.
-- I2C scan found device at 0x68.
-- 0x68 was reported as possible MPU6050.
-- I2C scan found device at 0x76.
-- 0x76 was reported as possible BMP280.
-- I2C scan complete: 2 devices found.
-- MPU6050 WHO_AM_I read returned 0x68.
-- Firmware logged:
-  MPU6050 detected: WHO_AM_I = 0x68
-  MPU6050 confirmed at 0x68
-- LED blink continued on GPIO2.
-- No crash.
-- BMP280 at 0x76 is address-detected only, not confirmed yet.
-
-This is a **PASS** for Prompt 3. MPU6050 confirmed at I2C `0x68`.
-
-⚠️ **Safety warning remains**: No ESCs, motors, or propellers connected during any Prompt 3 testing.
-
 ## Next Phase
 
-Prompt 4: MPU6050 raw accel/gyro burst read.
-Only after Prompt 3 WHO_AM_I == 0x68 confirmed.
+**Prompt 11: Safety State Machine**
+
+Implements arming/disarming logic, pre-arm checks, failsafe behavior, and error lockout states. Required before any motor-output hardware testing with ESCs connected.
+
+See `docs/current_phase.txt` for detailed phase history and hardware test results from earlier prompts.
 
 ## References
 
