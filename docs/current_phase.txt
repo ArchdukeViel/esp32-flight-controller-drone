@@ -1,4 +1,4 @@
-Prompt 6 — BMP280 chip ID read + driver (compensated pressure/temperature/altitude)
+Prompt 7 — Integrate BMP280 in app_main (detect, init, read compensated data in loop)
 ======================================
 
 Status: Build gate PENDING. Hardware gate PENDING.
@@ -26,19 +26,20 @@ Hardware result (2026-06-07):
 - Accel Z offset includes +1g so level reads ~0 m/s^2.
 - Calibration struct stored in NVS namespace "mpu6050_cal", key "offsets".
 - BMP280 component created with chip ID detection (0xD0 expects 0x58), calibration coeff read (0x88-0xA1), compensated read (Bosch formulas), altitude calculation.
+- BMP280 integration in app_main: detect, init, read compensated data in main loop.
+- Both sensors logged at ~1 Hz with LED blink, error counts every 50 reads.
 
-This is a PASS for Prompt 6. BMP280 driver implemented, awaiting hardware test.
+This is a PASS for Prompt 7. Both sensors integrated in main loop.
 
 What exists:
 - board_config component with hardware constants
 - i2c_bus component with I2C master bus init and scan
 - mpu6050 component with WHO_AM_I detection + raw/scaled burst read + calibration + NVS
 - bmp280 component with chip ID detection + calibration + compensated read + altitude
-- app_main initializes NVS, I2C, scans bus, checks MPU6050 WHO_AM_I, loads/runs calibration, then enters MPU6050 read loop with LED blink
+- app_main initializes NVS, I2C, scans bus, checks MPU6050 WHO_AM_I, loads/runs calibration, detects/init BMP280, then enters dual-sensor read loop with LED blink
 
 What does NOT exist:
-- BMP280 integration in app_main (next step)
-- Estimator (complementary filter, altitude)
+- Estimator (complementary filter, attitude + altitude fusion)
 - PID controller
 - MCPWM / motor output
 - WiFi / Android app
@@ -46,8 +47,8 @@ What does NOT exist:
 - Safety state machine
 
 Next gate:
-Prompt 7 — Integrate BMP280 in app_main (detect, init, read compensated data in loop).
-Only after Prompt 6 hardware result recorded.
+Prompt 8 — Estimator: complementary filter for attitude (roll/pitch from accel/gyro), altitude fusion (baro + accel Z).
+Only after Prompt 7 hardware result recorded.
 
 Remaining warnings:
 - MCPWM, ESC, WiFi, PID, receiver, safety state machine all DISABLED.

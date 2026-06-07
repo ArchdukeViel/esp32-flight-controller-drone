@@ -3,9 +3,11 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "driver/gpio.h"
+#include "nvs_flash.h"
 #include "board_config.h"
 #include "i2c_bus.h"
 #include "mpu6050.h"
+#include "bmp280.h"
 
 static const char* TAG = "main";
 
@@ -19,13 +21,21 @@ extern "C" void app_main(void)
     ESP_LOGI(TAG, "Sensors: MPU6050, BMP280");
     ESP_LOGI(TAG, "ESCs: 30A, Motors: 2212 2200KV");
     ESP_LOGI(TAG, "Framework: ESP-IDF v6.0.1, C++17");
-    ESP_LOGI(TAG, "Phase: Prompt 4 - MPU6050 raw accel/gyro burst read");
+    ESP_LOGI(TAG, "Phase: Prompt 7 - BMP280 integration");
     ESP_LOGI(TAG, "========================================");
 
     // Safety message
     ESP_LOGW(TAG, "SAFETY: No motor output exists in this phase.");
     ESP_LOGW(TAG, "MCPWM, ESC pins, WiFi, PID, receiver, safety state machine are DISABLED.");
     ESP_LOGW(TAG, "Do not connect ESCs or propellers.");
+
+    // Initialize NVS
+    esp_err_t ret = nvs_flash_init();
+    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        ESP_ERROR_CHECK(nvs_flash_erase());
+        ret = nvs_flash_init();
+    }
+    ESP_ERROR_CHECK(ret);
 
     // Initialize I2C master bus
     ESP_ERROR_CHECK(i2c_bus_init());
@@ -35,10 +45,44 @@ extern "C" void app_main(void)
 
     // Detect MPU6050 via WHO_AM_I register read
     esp_err_t mpu_ret = mpu6050_detect();
-    if (mpu_ret == ESP_OK) {
-        ESP_LOGI(TAG, "MPU6050 confirmed at 0x%02X", MPU6050_I2C_ADDR);
+    if (mpu_ret != ESP_OK) {
+        ESP_LOGE(TAG, "MPU6050 not detected, halting");
+        while (1) vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+    ESP_LOGI(TAG, "MPU6050 confirmed at 0x%02X", MPU6050_I2C_ADDR);
+
+    // Load MPU6050 calibration from NVS
+    mpu6050_load_calibration();
+    mpu6050_calibration_t mpu_cal;
+    mpu6050_get_calibration(&mpu_cal);
+
+    if (!mpu_cal.valid) {
+        ESP_LOGW(TAG, "No valid MPU6050 calibration found. Running calibration now...");
+        ESP_LOGW(TAG, "PLACE DEVICE ON LEVEL SURFACE AND KEEP STILL!");
+        vTaskDelay(pdMS_TO_TICKS(3000));
+        mpu6050_calibrate(&mpu_cal);
+        if (mpu_cal.valid) {
+            ESP_LOGI(TAG, "MPU6050 calibration complete and saved to NVS");
+        } else {
+            ESP_LOGE(TAG, "MPU6050 calibration failed, continuing without offsets");
+        }
     } else {
-        ESP_LOGW(TAG, "MPU6050 not detected or WHO_AM_I mismatch (will retry on next boot)");
+        ESP_LOGI(TAG, "Loaded MPU6050 calibration: ax=%d ay=%d az=%d gx=%d gy=%d gz=%d",
+                 mpu_cal.ax_offset, mpu_cal.ay_offset, mpu_cal.az_offset,
+                 mpu_cal.gx_offset, mpu_cal.gy_offset, mpu_cal.gz_offset);
+    }
+
+    // Detect and initialize BMP280
+    uint8_t bmp_addr = 0;
+    esp_err_t bmp_ret = bmp280_detect(&bmp_addr);
+    if (bmp_ret == ESP_OK) {
+        ESP_LOGI(TAG, "BMP280 confirmed at 0x%02X", bmp_addr);
+        ESP_ERROR_CHECK(bmp280_init());
+        bmp280_calib_t bmp_cal;
+        bmp280_get_calibration(&bmp_cal);
+        ESP_LOGI(TAG, "BMP280 calibration loaded: dig_T1=%u dig_P1=%u", bmp_cal.dig_T1, bmp_cal.dig_P1);
+    } else {
+        ESP_LOGW(TAG, "BMP280 not detected at 0x76 or 0x77");
     }
 
     // Optional LED blink if board_config defines a safe onboard LED pin
@@ -53,7 +97,8 @@ extern "C" void app_main(void)
     ESP_ERROR_CHECK(gpio_config(&io_conf));
 
     uint32_t read_count = 0;
-    mpu6050_error_count_t error_counts = {0};
+    mpu6050_error_count_t mpu_errs = {0};
+    bmp280_error_count_t bmp_errs = {0};
 
     while (1) {
         // Toggle LED for liveness
@@ -61,22 +106,18 @@ extern "C" void app_main(void)
         vTaskDelay(pdMS_TO_TICKS(100));
         ESP_ERROR_CHECK(gpio_set_level((gpio_num_t)BOARD_ONBOARD_LED_GPIO_NUM, 0));
 
-        // Read raw and scaled MPU6050 data
+        // Read MPU6050
         mpu6050_raw_t raw = {0};
         mpu6050_scaled_t scaled = {0};
-
         esp_err_t raw_ret = mpu6050_read_raw(&raw);
         esp_err_t scaled_ret = mpu6050_read_scaled(&scaled);
 
         if (raw_ret == ESP_OK && scaled_ret == ESP_OK) {
             read_count++;
             if (read_count % 10 == 0) {
-                // Log raw values every 10 reads (1 Hz at 10 Hz loop)
-                ESP_LOGI(TAG, "RAW  (#%lu): ax=%6d ay=%6d az=%6d  t=%6d  gx=%6d gy=%6d gz=%6d",
+                ESP_LOGI(TAG, "MPU RAW  (#%lu): ax=%6d ay=%6d az=%6d  t=%6d  gx=%6d gy=%6d gz=%6d",
                          read_count, raw.ax, raw.ay, raw.az, raw.t, raw.gx, raw.gy, raw.gz);
-
-                // Log scaled values every 10 reads
-                ESP_LOGI(TAG, "SCALED: ax=%7.3f ay=%7.3f az=%7.3f m/s^2  t=%5.2f C  gx=%7.3f gy=%7.3f gz=%7.3f rad/s",
+                ESP_LOGI(TAG, "MPU SCALED: ax=%7.3f ay=%7.3f az=%7.3f m/s^2  t=%5.2f C  gx=%7.3f gy=%7.3f gz=%7.3f rad/s",
                          scaled.ax, scaled.ay, scaled.az, scaled.t,
                          scaled.gx, scaled.gy, scaled.gz);
             }
@@ -85,21 +126,32 @@ extern "C" void app_main(void)
                      esp_err_to_name(raw_ret), esp_err_to_name(scaled_ret));
         }
 
+        // Read BMP280
+        bmp280_compensated_t bmp = {0};
+        esp_err_t bmp_read = bmp280_read_compensated(&bmp);
+        if (bmp_read == ESP_OK && read_count % 10 == 0) {
+            ESP_LOGI(TAG, "BMP280: T=%6.2f C  P=%10.0f Pa  Alt=%7.2f m",
+                     bmp.temperature, bmp.pressure, bmp.altitude);
+        } else if (bmp_read != ESP_OK && read_count % 10 == 0) {
+            ESP_LOGW(TAG, "BMP280 read failed: %s", esp_err_to_name(bmp_read));
+        }
+
         // Log error counts periodically
         if (read_count % 50 == 0) {
-            mpu6050_get_error_counts(&error_counts);
-            if (error_counts.read_errors > 0 || error_counts.init_errors > 0) {
-                ESP_LOGW(TAG, "Error counts: init=%lu read=%lu last_tick=%lu",
-                         error_counts.init_errors, error_counts.read_errors, error_counts.last_error_tick);
+            mpu6050_get_error_counts(&mpu_errs);
+            bmp280_get_error_counts(&bmp_errs);
+            if (mpu_errs.read_errors > 0 || mpu_errs.init_errors > 0 ||
+                bmp_errs.read_errors > 0 || bmp_errs.init_errors > 0) {
+                ESP_LOGW(TAG, "Errors: MPU(init=%lu read=%lu) BMP(init=%lu read=%lu)",
+                         mpu_errs.init_errors, mpu_errs.read_errors,
+                         bmp_errs.init_errors, bmp_errs.read_errors);
             }
         }
 
-        vTaskDelay(pdMS_TO_TICKS(900));  // ~1 Hz loop (100ms LED on + 900ms delay)
+        vTaskDelay(pdMS_TO_TICKS(900));
     }
 #else
     ESP_LOGI(TAG, "No safe onboard LED defined. Idle loop.");
-    while (1) {
-        vTaskDelay(pdMS_TO_TICKS(1000));
-    }
+    while (1) vTaskDelay(pdMS_TO_TICKS(1000));
 #endif
 }
