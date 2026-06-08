@@ -176,6 +176,8 @@ extern "C" void app_main(void)
     const TickType_t loop_period = pdMS_TO_TICKS(10);  // 100 Hz control loop
 
     while (1) {
+        bool zero_throttle_override = false;  // Reset each loop iteration
+
         // Toggle LED for liveness (every 10 loops = 10 Hz blink)
         if (loop_count % 10 == 0) {
             ESP_ERROR_CHECK(gpio_set_level((gpio_num_t)BOARD_ONBOARD_LED_GPIO_NUM, 1));
@@ -268,7 +270,6 @@ extern "C" void app_main(void)
 
             // Zero-throttle idle override: when throttle <= 0, force all motors to 0.0f
             // This ensures 1000us output (not 1080us from MOTOR_MIN_THROTTLE)
-            bool zero_throttle_override = false;
             if (target_throttle <= 0.0f) {
                 for (int i = 0; i < 4; i++) {
                     motor_mixer_out.motor[i] = 0.0f;
