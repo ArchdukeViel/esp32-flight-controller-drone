@@ -28,11 +28,12 @@ See `docs/current_phase.txt` for detailed status and hardware test results.
 - components/pid/ with 3-axis PID controller and anti-windup
 - components/motor_mixer/ with Quad X mixing matrix
 - components/motor_output/ with MCPWM 4-channel ESC driver (build-verified only)
+- components/safety/ with safety state machine (BOOT → DISARMED → PRE_ARM_CHECK → ARMED, plus FAILSAFE and ERROR), pre-arm checks, failsafe on sensor/estimator loss, error lockout, and emergency stop
+- app_main.cpp gates all motor output through `safety_is_motor_output_allowed()` (true only when ARMED)
 - sdkconfig.defaults with minimal ESP32 target
 - docs/current_phase.txt phase marker
 
 ### What does NOT exist yet:
-- ❌ Safety state machine (arming/disarming/pre-arm checks/failsafe)
 - ❌ Receiver input
 - ❌ WiFi telemetry/control
 - ❌ Android app
@@ -40,16 +41,17 @@ See `docs/current_phase.txt` for detailed status and hardware test results.
 
 ## Safety Warning
 
-⚠️ **MOTOR OUTPUT DRIVER EXISTS BUT SAFETY STATE MACHINE IS NOT IMPLEMENTED**
+⚠️ **MOTOR OUTPUT DRIVER EXISTS AND IS SAFETY-GATED; ESC/MOTOR HARDWARE TESTING IS STILL PENDING**
 
 Current firmware state:
 - MCPWM motor output driver is initialized and drives ESC pins (GPIO 18, 19, 23, 25)
 - Outputs default to 1000 µs idle pulse on boot
-- Motors remain DISARMED in current code (motor_output_arm() never called)
-- No safety state machine, no arming checks, no failsafe logic
-- Hardware motor gate: NOT PASSED (build-only verification)
+- Safety state machine is implemented and integrated (build-gated); all motor output above idle passes through `safety_is_motor_output_allowed()`, which is true only when ARMED
+- Non-ARMED states (BOOT, DISARMED, PRE_ARM_CHECK, FAILSAFE, ERROR) force 1000 µs idle output
+- Emergency stop and failsafe (on sensor/estimator loss) are implemented; no automatic arming path
+- Hardware motor gate: NOT PASSED (build-only verification; ESCs not connected/tested)
 
-**KEEP PROPELLERS REMOVED.** Do not connect ESCs or motors for testing until Prompt 11 Safety State Machine is implemented and hardware-verified. ESC signal capability exists but is not safety-gated.
+**KEEP PROPELLERS REMOVED.** Do not connect ESCs or motors for testing until the no-prop hardware gates have passed and you explicitly request the motor test phase. ESC signal output is now safety-gated in firmware, but ESC/motor hardware behavior has not been validated.
 
 ## Build
 
