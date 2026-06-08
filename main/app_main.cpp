@@ -18,6 +18,21 @@ static const char* TAG = "main";
 
 // Test trigger: GPIO0 (BOOT button) for arm/disarm
 #define TEST_ARM_BUTTON_GPIO 0
+#define TEST_ARM_BUTTON_DEBOUNCE_MS 250
+
+// Helper to convert safety_state_t to string (defined at file scope)
+static const char* safety_state_to_string(safety_state_t state)
+{
+    switch (state) {
+        case SAFETY_STATE_BOOT: return "BOOT";
+        case SAFETY_STATE_DISARMED: return "DISARMED";
+        case SAFETY_STATE_PRE_ARM_CHECK: return "PRE_ARM_CHECK";
+        case SAFETY_STATE_ARMED: return "ARMED";
+        case SAFETY_STATE_FAILSAFE: return "FAILSAFE";
+        case SAFETY_STATE_ERROR: return "ERROR";
+        default: return "UNKNOWN";
+    }
+}
 
 extern "C" void app_main(void)
 {
@@ -120,14 +135,21 @@ extern "C" void app_main(void)
     ESP_ERROR_CHECK(safety_init());
 
     // Configure test arm button (GPIO0 - BOOT button)
+    // Note: Polled in main loop, no interrupt used
     ESP_LOGI(TAG, "Configuring test arm button on GPIO%d", TEST_ARM_BUTTON_GPIO);
     gpio_config_t button_io_conf = {};
-    button_io_conf.intr_type = GPIO_INTR_POSEDGE;  // Rising edge (release)
+    button_io_conf.intr_type = GPIO_INTR_DISABLE;  // Polled, not interrupt-driven
     button_io_conf.mode = GPIO_MODE_INPUT;
     button_io_conf.pin_bit_mask = (1ULL << TEST_ARM_BUTTON_GPIO);
     button_io_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
-    button_io_conf.pull_up_en = GPIO_PULLUP_ENABLE;  // Internal pull-up
+    button_io_conf.pull_up_en = GPIO_PULLUP_ENABLE;  // Internal pull-up (active-low)
     ESP_ERROR_CHECK(gpio_config(&button_io_conf));
+
+    // Read initial button state - require release before accepting first press
+    // This prevents arming if BOOT button is held during startup
+    bool last_button_level = gpio_get_level((gpio_num_t)TEST_ARM_BUTTON_GPIO);
+    bool button_press_armed = (last_button_level == 1);  // Released = armed for press detection
+    uint32_t last_button_event_ms = xTaskGetTickCount() * portTICK_PERIOD_MS;
 
     // Optional LED blink if board_config defines a safe onboard LED pin
 #ifdef BOARD_HAS_SAFE_ONBOARD_LED
@@ -149,7 +171,6 @@ extern "C" void app_main(void)
     motor_output_state_t motor_output_state = {};
     float target_throttle = 0.0f;  // Disarmed
     estimator_attitude_t target_attitude = {};  // Level target
-    static bool last_button_state = true;  // Pulled high
 
     TickType_t last_wake = xTaskGetTickCount();
     const TickType_t loop_period = pdMS_TO_TICKS(10);  // 100 Hz control loop
@@ -162,19 +183,52 @@ extern "C" void app_main(void)
             ESP_ERROR_CHECK(gpio_set_level((gpio_num_t)BOARD_ONBOARD_LED_GPIO_NUM, 0));
         }
 
-        // Check BOOT button for arm/disarm (falling edge = pressed)
-        bool button_state = gpio_get_level((gpio_num_t)TEST_ARM_BUTTON_GPIO);
-        if (last_button_state && !button_state) {  // Button just pressed
-            safety_state_t cur_state = safety_get_state();
-            if (cur_state == SAFETY_STATE_DISARMED) {
-                ESP_LOGW(TAG, ">>> TEST: Arm requested via BOOT button <<<");
-                safety_request_arm();
-            } else if (cur_state == SAFETY_STATE_ARMED) {
-                ESP_LOGW(TAG, ">>> TEST: Disarm requested via BOOT button <<<");
-                safety_request_disarm();
+        // Check BOOT button for arm/disarm with proper debounce
+        // Active-low: level 0 = pressed, level 1 = released
+        bool current_button_level = gpio_get_level((gpio_num_t)TEST_ARM_BUTTON_GPIO);
+        uint32_t now_ms = xTaskGetTickCount() * portTICK_PERIOD_MS;
+
+        // Detect stable active-low press: was released (1), now pressed (0)
+        // Only trigger if button was previously released and debounce time passed
+        bool debounced_press = false;
+        if (last_button_level == 1 && current_button_level == 0) {
+            // Falling edge detected - check debounce
+            if (button_press_armed && (now_ms - last_button_event_ms) >= TEST_ARM_BUTTON_DEBOUNCE_MS) {
+                debounced_press = true;
+                last_button_event_ms = now_ms;
+                button_press_armed = false;  // Require release before next press
             }
+        } else if (current_button_level == 1) {
+            // Button released - re-arm for next press detection
+            button_press_armed = true;
         }
-        last_button_state = button_state;
+
+        if (debounced_press) {
+            safety_state_t cur_state = safety_get_state();
+            ESP_LOGW(TAG, "Debounced BOOT press detected");
+
+            if (cur_state == SAFETY_STATE_DISARMED) {
+                ESP_LOGW(TAG, "Arm requested via BOOT button");
+                esp_err_t ret = safety_request_arm();
+                ESP_LOGW(TAG, "safety_request_arm returned %s", esp_err_to_name(ret));
+            } else if (cur_state == SAFETY_STATE_ARMED) {
+                ESP_LOGW(TAG, "Disarm requested via BOOT button");
+                esp_err_t ret = safety_request_disarm();
+                ESP_LOGW(TAG, "safety_request_disarm returned %s", esp_err_to_name(ret));
+            } else {
+                ESP_LOGW(TAG, "BOOT press ignored - current state: %s", safety_state_to_string(cur_state));
+            }
+
+            // Log safety status after request
+            safety_status_t status = {};
+            safety_get_status(&status);
+            ESP_LOGW(TAG, "SAFETY: state=%s can_arm=%s%s%s",
+                     safety_state_to_string(status.state),
+                     status.can_arm ? "YES" : "NO",
+                     status.last_failure_reason ? " reason=" : "",
+                     status.last_failure_reason ? status.last_failure_reason : "");
+        }
+        last_button_level = current_button_level;
 
         // Read MPU6050
         mpu6050_raw_t raw = {};
@@ -210,6 +264,16 @@ extern "C" void app_main(void)
                 ESP_LOGE(TAG, "Motor mixer failed: %s (invalid control data)", esp_err_to_name(mix_ret));
                 // Force safe idle output on mixer failure
                 motor_mixer_disarm(&motor_mixer_out);
+            }
+
+            // Zero-throttle idle override: when throttle <= 0, force all motors to 0.0f
+            // This ensures 1000us output (not 1080us from MOTOR_MIN_THROTTLE)
+            bool zero_throttle_override = false;
+            if (target_throttle <= 0.0f) {
+                for (int i = 0; i < 4; i++) {
+                    motor_mixer_out.motor[i] = 0.0f;
+                }
+                zero_throttle_override = true;
             }
 
             // Send to motor output (MCPWM) - only if safety allows
@@ -263,10 +327,16 @@ extern "C" void app_main(void)
                 };
                 ESP_LOGI(TAG, "PID:   roll=%7.3f pitch=%7.3f yaw=%7.3f  (norm)",
                          pid_output[0], pid_output[1], pid_output[2]);
-                ESP_LOGI(TAG, "MIX:   FR=%5.3f FL=%5.3f RR=%5.3f RL=%5.3f  PWM: %u %u %u %u us",
-                         motor_mixer_out.motor[0], motor_mixer_out.motor[1],
-                         motor_mixer_out.motor[2], motor_mixer_out.motor[3],
-                         pwm[0], pwm[1], pwm[2], pwm[3]);
+                // Log zero-throttle override if active
+                if (zero_throttle_override) {
+                    ESP_LOGI(TAG, "MIX:   throttle=%.3f zero_idle=YES  PWM: %u %u %u %u us",
+                             target_throttle, pwm[0], pwm[1], pwm[2], pwm[3]);
+                } else {
+                    ESP_LOGI(TAG, "MIX:   FR=%5.3f FL=%5.3f RR=%5.3f RL=%5.3f  PWM: %u %u %u %u us",
+                             motor_mixer_out.motor[0], motor_mixer_out.motor[1],
+                             motor_mixer_out.motor[2], motor_mixer_out.motor[3],
+                             pwm[0], pwm[1], pwm[2], pwm[3]);
+                }
                 ESP_LOGI(TAG, "MCPWM: ARMED=%s  pulse_us: %u %u %u %u",
                          motor_output_state.armed ? "YES" : "NO",
                          motor_output_state.pulse_us[0], motor_output_state.pulse_us[1],
