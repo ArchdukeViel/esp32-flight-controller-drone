@@ -16,6 +16,9 @@
 
 static const char* TAG = "main";
 
+// Test trigger: GPIO0 (BOOT button) for arm/disarm
+#define TEST_ARM_BUTTON_GPIO 0
+
 extern "C" void app_main(void)
 {
     // Boot banner
@@ -116,16 +119,26 @@ extern "C" void app_main(void)
     // Initialize safety state machine
     ESP_ERROR_CHECK(safety_init());
 
+    // Configure test arm button (GPIO0 - BOOT button)
+    ESP_LOGI(TAG, "Configuring test arm button on GPIO%d", TEST_ARM_BUTTON_GPIO);
+    gpio_config_t button_io_conf = {};
+    button_io_conf.intr_type = GPIO_INTR_POSEDGE;  // Rising edge (release)
+    button_io_conf.mode = GPIO_MODE_INPUT;
+    button_io_conf.pin_bit_mask = (1ULL << TEST_ARM_BUTTON_GPIO);
+    button_io_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
+    button_io_conf.pull_up_en = GPIO_PULLUP_ENABLE;  // Internal pull-up
+    ESP_ERROR_CHECK(gpio_config(&button_io_conf));
+
     // Optional LED blink if board_config defines a safe onboard LED pin
 #ifdef BOARD_HAS_SAFE_ONBOARD_LED
     ESP_LOGI(TAG, "Blinking onboard LED on GPIO %d", BOARD_ONBOARD_LED_GPIO_NUM);
-    gpio_config_t io_conf = {};
-    io_conf.intr_type = GPIO_INTR_DISABLE;
-    io_conf.mode = GPIO_MODE_OUTPUT;
-    io_conf.pin_bit_mask = (1ULL << BOARD_ONBOARD_LED_GPIO_NUM);
-    io_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
-    io_conf.pull_up_en = GPIO_PULLUP_DISABLE;
-    ESP_ERROR_CHECK(gpio_config(&io_conf));
+    gpio_config_t led_io_conf = {};
+    led_io_conf.intr_type = GPIO_INTR_DISABLE;
+    led_io_conf.mode = GPIO_MODE_OUTPUT;
+    led_io_conf.pin_bit_mask = (1ULL << BOARD_ONBOARD_LED_GPIO_NUM);
+    led_io_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
+    led_io_conf.pull_up_en = GPIO_PULLUP_DISABLE;
+    ESP_ERROR_CHECK(gpio_config(&led_io_conf));
 
     uint32_t loop_count = 0;
     mpu6050_error_count_t mpu_errs = {};
@@ -136,6 +149,7 @@ extern "C" void app_main(void)
     motor_output_state_t motor_output_state = {};
     float target_throttle = 0.0f;  // Disarmed
     estimator_attitude_t target_attitude = {};  // Level target
+    static bool last_button_state = true;  // Pulled high
 
     TickType_t last_wake = xTaskGetTickCount();
     const TickType_t loop_period = pdMS_TO_TICKS(10);  // 100 Hz control loop
@@ -147,6 +161,20 @@ extern "C" void app_main(void)
         } else if (loop_count % 10 == 1) {
             ESP_ERROR_CHECK(gpio_set_level((gpio_num_t)BOARD_ONBOARD_LED_GPIO_NUM, 0));
         }
+
+        // Check BOOT button for arm/disarm (falling edge = pressed)
+        bool button_state = gpio_get_level((gpio_num_t)TEST_ARM_BUTTON_GPIO);
+        if (last_button_state && !button_state) {  // Button just pressed
+            safety_state_t cur_state = safety_get_state();
+            if (cur_state == SAFETY_STATE_DISARMED) {
+                ESP_LOGW(TAG, ">>> TEST: Arm requested via BOOT button <<<");
+                safety_request_arm();
+            } else if (cur_state == SAFETY_STATE_ARMED) {
+                ESP_LOGW(TAG, ">>> TEST: Disarm requested via BOOT button <<<");
+                safety_request_disarm();
+            }
+        }
+        last_button_state = button_state;
 
         // Read MPU6050
         mpu6050_raw_t raw = {};
@@ -226,8 +254,13 @@ extern "C" void app_main(void)
             // Log PID + motor mixer + motor output
             if (est_state.initialized) {
                 motor_output_get_state(&motor_output_state);
-                uint16_t pwm[4];
-                for (int i = 0; i < 4; i++) pwm[i] = motor_mixer_to_pwm_us(motor_mixer_out.motor[i]);
+                // Show actual safety-gated PWM output
+                uint16_t pwm[4] = {
+                    motor_output_state.pulse_us[0],
+                    motor_output_state.pulse_us[1],
+                    motor_output_state.pulse_us[2],
+                    motor_output_state.pulse_us[3]
+                };
                 ESP_LOGI(TAG, "PID:   roll=%7.3f pitch=%7.3f yaw=%7.3f  (norm)",
                          pid_output[0], pid_output[1], pid_output[2]);
                 ESP_LOGI(TAG, "MIX:   FR=%5.3f FL=%5.3f RR=%5.3f RL=%5.3f  PWM: %u %u %u %u us",
