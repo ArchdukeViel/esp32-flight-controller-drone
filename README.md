@@ -76,7 +76,7 @@ See `docs/current_phase.txt` for detailed phase history and hardware test result
 
 ## References
 
-- Workspace rules: `.clinerules/01-esp32-flight-controller-workspace-rules.md`
+- Project rules: `docs/project_rules.md`
 - Canonical roadmap: `docs/esp32_flight_controller_canonical_merged_plan_wifi_android.txt`
 - Current phase: `docs/current_phase.txt`
 

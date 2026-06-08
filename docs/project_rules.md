@@ -1,6 +1,7 @@
-# ESP32 Flight Controller Workspace Rules
+# ESP32 Flight Controller — Project Rules
 
-These rules apply only to this workspace:
+Project-owned, agent-neutral operating rules for this repository. These rules
+apply to all work in this workspace:
 
 ```txt
 C:\Akmal\esp32-flight-controller-drone
@@ -22,7 +23,8 @@ Canonical reference document:
 docs/esp32_flight_controller_canonical_merged_plan_wifi_android.txt
 ```
 
-This document is the full roadmap/design reference. Treat it as the project library, not as context that must be read every run.
+This document is the full roadmap/design reference. Treat it as the project
+library, not as context that must be read every run.
 
 ---
 
@@ -30,7 +32,7 @@ This document is the full roadmap/design reference. Treat it as the project libr
 
 - Act as the implementation agent for this repository.
 - Do not act as the project architect unless explicitly asked.
-- Follow these workspace rules first.
+- Follow these project rules first.
 - Treat the canonical roadmap/design document as the source of truth for project direction.
 - If a user request conflicts with these rules or the canonical roadmap, stop and report the conflict before editing.
 - Work in small, reviewable phases.
@@ -53,7 +55,7 @@ Keep reports short unless debugging requires detail.
 
 ## 2. Context and token economy rules
 
-The model provider may have RTK/token-saving enabled, but do not rely on that. Reduce unnecessary context yourself.
+Reduce unnecessary context yourself.
 
 ### Do not read everything by default
 
@@ -67,8 +69,8 @@ The model provider may have RTK/token-saving enabled, but do not rely on that. R
 For most tasks, inspect only:
 
 ```txt
-.clinerules/
 docs/current_phase.txt
+docs/project_rules.md
 .vscode/settings.json
 root directory listing
 files directly involved in the requested phase
@@ -81,6 +83,10 @@ Only inspect the full canonical roadmap when:
 - the user explicitly asks,
 - the current task references a roadmap section or prompt.
 
+The large canonical roadmap
+(`docs/esp32_flight_controller_canonical_merged_plan_wifi_android.txt`) should not
+be auto-loaded into context; open it only under the conditions above.
+
 ### Recommended current phase file
 
 If present, use this file as the immediate task guide:
@@ -91,7 +97,7 @@ docs/current_phase.txt
 
 This file should be small and phase-specific. Prefer reading it instead of the full roadmap.
 
-If `docs/current_phase.txt` is missing, ask whether to create it or proceed only from the user prompt and these workspace rules.
+If `docs/current_phase.txt` is missing, ask whether to create it or proceed only from the user prompt and these project rules.
 
 ### Output limits
 
@@ -435,7 +441,7 @@ Required test categories:
 - Hardware tests for I2C scan, MPU6050 `WHO_AM_I`, BMP280 chip ID, MCPWM pulse widths, receiver input timing, and emergency stop latency.
 - Long-run tests before integration: sensor telemetry run, no I2C error check, free heap monitoring, loop timing monitoring.
 
-Never mark a hardware phase complete without the user’s measured output or log.
+Never mark a hardware phase complete without the user's measured output or log.
 
 ---
 

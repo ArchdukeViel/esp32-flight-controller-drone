@@ -4,17 +4,17 @@ Hermes-facing operating contract for this repository. Safety-critical firmware
 that drives rotating brushless motors.
 
 ## Source of truth (read in this order)
-1. `.clinerules/` — authoritative workspace rules (safety, phases, reporting).
-2. `docs/current_phase.txt` — current gate status and immediate task guide.
-3. This file — a compact summary of the above for Hermes sessions.
+1. `docs/current_phase.txt` — current gate status and immediate task guide.
+2. `docs/project_rules.md` — authoritative project rules (safety, phases, hardware constants, testing, reporting, failure behavior).
+3. `docs/esp32_flight_controller_canonical_merged_plan_wifi_android.txt` — full roadmap/design reference; read only when the current phase is unclear, a design decision is needed, safety boundaries are ambiguous, or the user explicitly asks.
+4. `README.md` — human-facing overview only.
 
-Do **not** read the full canonical roadmap
-(`docs/esp32_flight_controller_canonical_merged_plan_wifi_android.txt`) unless the
-current phase is unclear, a design decision is needed, safety boundaries are
-ambiguous, or the user explicitly asks. Prefer `docs/current_phase.txt`.
+This file (AGENTS.md) is a compact summary of `docs/project_rules.md` for quick
+loading each session. Prefer `docs/current_phase.txt` for the active task; do not
+auto-load the full canonical roadmap.
 
-If a request conflicts with `.clinerules` or the roadmap, STOP and report the
-conflict before editing.
+If a request conflicts with `docs/project_rules.md` or the roadmap, STOP and report
+the conflict before editing.
 
 ## Safety is law
 This project controls rotating motors. Never optimize around safety gates.
@@ -33,7 +33,7 @@ This project controls rotating motors. Never optimize around safety gates.
   immediately and overrides ramp limiting.
 - Never claim a hardware/safety test passed without the user's measured result.
 
-## Phase discipline (23-phase roadmap — .clinerules §6)
+## Phase discipline (23-phase roadmap — docs/project_rules.md §6)
 1 toolchain · 2 skeleton+boot log · 3 I2C scan · 4 MPU6050 detect/read · 5 MPU6050
 cal+NVS · 6 BMP280 · 7 sensor telemetry/validation · 8 attitude estimator · 9
 receiver/stub · 10 MCPWM signal (ESC power off) · 11 motor-test SM (no-prop conf) ·
@@ -50,7 +50,7 @@ readiness review · 23 tethered/low hover.
 - **Current status: always read `docs/current_phase.txt`. Do not infer the active
   phase from this file.**
 - **Do not assume Prompt N equals roadmap phase N. Check `docs/current_phase.txt`
-  and `.clinerules` before mapping prompt numbers to roadmap phases.**
+  and `docs/project_rules.md` before mapping prompt numbers to roadmap phases.**
 
 ## Build (ESP-IDF v6.0.1, native Windows cmd — NOT git-bash)
 ```bat
